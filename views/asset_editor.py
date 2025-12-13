@@ -33,8 +33,7 @@ def show_asset_editor(df_assets_original, lookup_data):
         # 빈 프레임 생성 시에도 한글 컬럼 포함
         df_assets_to_edit = pd.DataFrame(columns=list(df_assets_original.columns) + ['asset_type_kr', 'currency_kr', 'market_kr'])
 
-    # 데이터 에디터 설정 (드롭다운 + 한글 적용)
-    # 📌 [2-2번 요청 반영] column_config를 사용하여 드롭다운 설정
+    # 데이터 에디터 설정 (column_config를 사용하여 드롭다운 설정)
     column_config = {
         "id": None, # PK 숨김
         "name_kr": st.column_config.TextColumn("종목명 (한글)", required=True),
@@ -66,10 +65,16 @@ def show_asset_editor(df_assets_original, lookup_data):
     
     display_cols = ['name_kr', 'ticker', 'asset_type_kr', 'currency_kr', 'market_kr', 'current_price']
     
+    row_count = len(df_assets_to_edit)
+    calculated_height = min(35 * row_count + 38, 2000)  # 최대 2000px
+
     edited_df = st.data_editor(
-        df_assets_to_edit[display_cols],
+        df_assets_to_edit[display_cols].sort_values(by=['market_kr', 'currency_kr', 'asset_type_kr', 'name_kr'], 
+                                                    ascending=[False, True, True, True]),
         num_rows="dynamic",
+        height=calculated_height,
         width='stretch',
+        hide_index=True,
         column_config=column_config,
         key="asset_editor"
     )

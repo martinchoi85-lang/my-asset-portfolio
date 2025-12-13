@@ -1,6 +1,5 @@
 # 데이터베이스 연결과 조회 로직만 담당합니다. UI 코드는 넣지 않습니다.
 # 기존 app.py에 있던 init_connection, fetch_data... 등의 함수를 이곳으로 옮기고, 데이터 저장/업데이트 기능을 보강했습니다.
-# utils/data_loader.py (수정 버전)
 import os
 import pandas as pd
 import streamlit as st
@@ -223,7 +222,7 @@ def update_data(table_name, df_changes):
                 df_changes['asset_id'] = df_changes['name_kr'].map(lookup['asset_name_to_id'])
                 df_changes = df_changes.drop(columns=['name_kr'], errors='ignore')
 
-            # 📌 [1번 요청 반영] 계좌명 변환 (UI Display Name -> DB ID)
+            # 계좌명 변환 (UI Display Name -> DB ID)
             if 'account_display_name' in df_changes.columns:
                 # UI에서 선택된 Display Name을 ID로 변환하여 DB에 저장
                 df_changes['account_id'] = df_changes['account_display_name'].map(lookup['account_name_to_id_display'])

@@ -1,11 +1,11 @@
 # 기존 앱의 편집 기능을 구현합니다. st.data_editor를 사용하여 엑셀처럼 편집할 수 있습니다.
 import streamlit as st
 import pandas as pd
-from utils.data_loader import update_data
+from utils.data_loader import update_data#, delete_data
 
 def show_transaction_editor(df_transactions, lookup_data):
     st.markdown("### 📝 거래 기록 관리")
-    st.caption("여기서 데이터를 수정/추가하면 'transactions' 테이블에 반영됩니다.")
+    st.caption("여기서 데이터를 수정/추가/삭제하면 'transactions' 테이블에 반영됩니다.")
 
     # 룩업 데이터 가져오기
     asset_id_to_name = lookup_data['asset_id_to_name']
@@ -33,16 +33,26 @@ def show_transaction_editor(df_transactions, lookup_data):
         empty_cols = list(df_transactions.columns) + ['name_kr', 'account_display_name']
         df_transactions = pd.DataFrame(columns=empty_cols)
 
+    # 📌 [추가] 삭제용 체크박스 컬럼 추가
+    df_transactions.insert(0, '선택', False)
+
     # ---------------------------------------------------------
     # 데이터 에디터 설정(드롭다운 적용)
     # ---------------------------------------------------------
-    # num_rows="dynamic": 행 추가/삭제 가능하게 설정
     # 선택 가능한 Display Name 리스트
     display_name_options = list(lookup_data['account_name_to_id_display'].keys())
     
     column_config = {
+        # 📌 [추가] 체크박스 컬럼 설정 (width 제거로 자동 크기 조정)
+        "선택": st.column_config.CheckboxColumn(
+            "☑",  # 짧은 헤더로 변경
+            help="삭제할 거래를 선택하세요",
+            # width="small",   ############################## 값을 지정해서 넣을 수는 없는지?
+            default=False
+        ),
+        "transaction_date": st.column_config.DateColumn("거래일", required=True),
         "name_kr": st.column_config.SelectboxColumn(
-            "자산명 (name_kr)",
+            "자산명",
             options=list(asset_id_to_name.values()),
             required=True,
             width='medium'
@@ -54,14 +64,22 @@ def show_transaction_editor(df_transactions, lookup_data):
             required=True,
             width='medium'
         ),
-        "type": st.column_config.SelectboxColumn(
+        "trade_type": st.column_config.SelectboxColumn(
             "거래 유형",
             options=trade_types,
-            required=True
+            required=True,
+            width="small"
         ),
-        "transaction_date": st.column_config.DateColumn("거래일"),
-        "price": st.column_config.NumberColumn("가격", format="%.2f"),
-        "amount": st.column_config.NumberColumn("총액", format="%d"),
+        "quantity": st.column_config.NumberColumn(
+            "수량",
+            format="%.2f",
+            width="small"
+        ),
+        "price": st.column_config.NumberColumn(
+            "가격",
+            format="%.2f",
+            width="small"
+        ),
         # 기존 account_name 필드와 ID 필드는 숨김
         "account_name": None,
         "asset_id": None, 
@@ -70,29 +88,94 @@ def show_transaction_editor(df_transactions, lookup_data):
     }
 
     display_cols = [
-        'transaction_date', 'name_kr', 'account_display_name', 'trade_type', 
-        'quantity', 'price'
+        '선택', 'transaction_date', 'name_kr', 'account_display_name', 
+        'trade_type', 'quantity', 'price'
     ]
+
+    # 날짜 기준 내림차순 정렬 (최신 거래가 위로)
+    df_transactions = df_transactions.sort_values(by='transaction_date', ascending=False)
     
+    # 📌 [중요] 정렬 후 인덱스를 Range Index로 리셋 (경고 해결)
+    df_transactions = df_transactions.reset_index(drop=True)
+
+    # 📌 슬라이더로 행 수 선택
+    rows_num = st.slider(
+        "표시할 테이블 행 수",
+        min_value=20,
+        max_value=min(100, len(df_transactions)) if len(df_transactions) > 20 else 20,
+        value=20,
+        step=5,
+        key='transaction_rows_slider'
+    )
+
+    # 📌 높이 계산
+    calculated_height = min(35 * rows_num + 38, 2000)
+
+    # 📌 테이블 표시
     edited_df = st.data_editor(
         df_transactions[display_cols],
         num_rows="dynamic", 
-        # 📌 [Warning 반영] use_container_width=True 대신 width='stretch' 사용
-        width='stretch', 
+        height=calculated_height,
+        width='stretch',
+        hide_index=True,  # 이제 정상 작동!
         column_config=column_config,
         key="transaction_editor"
     )
 
     # ---------------------------------------------------------
-    # 저장 버튼 로직
+    # 📌 [추가] 버튼 영역 (삭제 + 저장)
     # ---------------------------------------------------------
-    col_l, col_r = st.columns([4, 1])
-    with col_r:
-        if st.button("💾 변경사항 저장", type="primary", width='stretch'):
-            # 실제 변경된 데이터만 찾아서 업데이트하는 로직이 이상적이나,
-            # 편의상 전체/변경된 행을 업데이트 함수로 넘깁니다.
-            # (Streamlit data_editor는 변경된 상태인 edited_df를 바로 반환합니다)
+    col_info, col_delete, col_save = st.columns([2, 1, 1])
+    
+    with col_info:
+        selected_count = edited_df['선택'].sum()
+        if selected_count > 0:
+            st.info(f"📌 {int(selected_count)}개 거래 선택됨")
+    
+    with col_delete:
+        if st.button("🗑️ 선택 삭제", type="secondary", width='stretch'):
+            # 체크된 행 찾기
+            rows_to_delete = edited_df[edited_df['선택'] == True]
             
-            # 주의: 새로 추가된 행은 id가 없을 수 있음. Supabase가 처리하도록 맡기거나 처리 필요.
-            if update_data("transactions", edited_df):
-                st.rerun() # 저장 후 새로고침
+            if len(rows_to_delete) > 0:
+                # 원본 df에서 id 찾기 (인덱스로 매칭)
+                delete_indices = rows_to_delete.index
+                ids_to_delete = df_transactions.loc[delete_indices, 'id'].dropna().tolist()
+                
+                # DB 삭제
+                success_count = 0
+                for del_id in ids_to_delete:
+                    if delete_data("transactions", int(del_id)):
+                        success_count += 1
+                
+                st.success(f"✅ {success_count}개 거래가 삭제되었습니다.")
+                st.rerun()
+            else:
+                st.warning("⚠️ 삭제할 거래를 선택해주세요.")
+    
+    with col_save:
+        if st.button("💾 변경사항 저장", type="primary", width='stretch'):
+            # '선택' 컬럼 제거
+            save_df = edited_df.drop(columns=['선택'])
+            
+            # 원본 df의 id, asset_id, account_name 컬럼 복원
+            if 'id' in df_transactions.columns:
+                save_df['id'] = df_transactions['id']
+            
+            # 📌 [중요] Display Name -> DB의 account_name으로 역변환
+            display_to_name_map = {v: k for k, v in name_to_display_map.items()}
+            save_df['account_name'] = save_df['account_display_name'].map(display_to_name_map)
+            
+            # 📌 [중요] 자산명(한글) -> asset_id로 역변환
+            name_to_asset_id = {v: k for k, v in asset_id_to_name.items()}
+            save_df['asset_id'] = save_df['name_kr'].map(name_to_asset_id)
+            
+            # UI용 컬럼 제거
+            save_df = save_df.drop(columns=['name_kr', 'account_display_name'])
+            
+            # DB 저장
+            if update_data("transactions", save_df):
+                st.success("✅ 변경사항이 저장되었습니다.")
+                st.rerun()
+            else:
+                st.error("❌ 저장 중 오류가 발생했습니다.")

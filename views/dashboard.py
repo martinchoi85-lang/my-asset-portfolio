@@ -1,15 +1,11 @@
 # 대시보드: 시각화 & 포맷팅)
-# 핵심 변경점:
-# 1)숫자 포맷팅: st.column_config를 사용하여 숫자가 문자로 깨지는 문제 해결.
-# 2)모바일 최적화: width='stretch' 및 중요 컬럼 위주 표시.
-# views/dashboard.py (수정 버전)
 import streamlit as st
 import pandas as pd
 import altair as alt
 
-# 조건부 스타일링 함수 정의
+# 조건부 스타일링 함수
+"""평가손익과 수익률이 양수/음수에 따라 색상을 적용합니다."""
 def highlight_pnl(s):
-    """평가손익과 수익률이 양수/음수에 따라 색상을 적용합니다."""
     # 평가손익 (unrealized_pnl)과 수익률 (unrealized_return_rate) 컬럼을 찾아 색상을 결정
     styles = [''] * len(s)
     
@@ -59,12 +55,19 @@ def show_dashboard(asset_summary_df, usd_rate, lookup_data):
     # 2. 보유 자산 상세 테이블 (필드명 및 포맷팅 수정, 접기/펼치기 및 스타일링 적용)
     # ---------------------------------------------------------
     st.subheader("📌 보유 종목 현황")
-    # 📌 [1번 요청 반영] st.expander를 사용하여 테이블을 감싸고, 기본은 닫힌 상태로 둠
-    # rows가 길면 스크롤이 되지만, expander를 통해 전체를 펼쳐 볼 수 있음.
-    
+
     df = asset_summary_df.copy()
 
+    # UI용 룩업 맵 (ID -> Display Name)
+    account_id_to_name_display = lookup_data['account_id_to_name_db']
+    # DB용 룩업 맵 (DB 계좌명 -> ID)
+    account_name_to_id_db = lookup_data['account_name_to_id_db']
+    
+    if not df.empty:
+        df['account_display_name'] = df['account_id'].map(account_id_to_name_display)
+    
     column_config = {
+        "account_display_name": st.column_config.TextColumn("계좌"),
         "name_kr": st.column_config.TextColumn("종목명"),
         "ticker": st.column_config.TextColumn("티커"),
         "total_quantity": st.column_config.NumberColumn("보유수량", format="%.2f"),
@@ -77,48 +80,48 @@ def show_dashboard(asset_summary_df, usd_rate, lookup_data):
     }
 
     display_columns = [
-        "name_kr", "ticker", "total_quantity", 
+        "account_display_name", "name_kr", "ticker", "total_quantity", 
         "total_valuation_amount", "unrealized_pnl", "unrealized_return_rate"
     ]
-    
-    final_cols = [c for c in display_columns if c in asset_summary_df.columns]
 
-# 📌 [2번 요청 반영] session_state를 이용한 테이블 펼치기/접기 상태 관리
-    if 'dashboard_table_expanded' not in st.session_state:
-        st.session_state['dashboard_table_expanded'] = True # 기본값: 펼침
+    final_cols = [c for c in display_columns if c in df.columns]
 
-    is_expanded = st.session_state['dashboard_table_expanded']
+    df = df.sort_values(by='account_display_name', ascending=True)
 
-    # 조건부 스타일링 적용 (Read-Only 상태)
-    # df.style을 적용하기 위해 컬럼을 먼저 선택하고, NaN 값 처리
+    # 조건부 스타일링 적용
     styled_df_data = df[final_cols].fillna(0)
     styled_df = styled_df_data.style.apply(highlight_pnl, axis=1)
 
-    # 📌 [에러 수정 및 2번 요청 반영] 펼침/접힘 상태에 따라 height 인자를 다르게 전달
-    if is_expanded:
-        button_label = "테이블 접기 (스크롤 모드로 전환)"
-        # 펼침 상태: height 인자를 완전히 생략하여 모든 행을 표시 (에러 방지)
-        st.dataframe(
-            styled_df, # 스타일링 적용된 DF
-            column_config=column_config,
-            width='stretch',
-            hide_index=True
+    # 📌 세션 상태 초기화
+    if 'table_rows' not in st.session_state:
+        st.session_state['table_rows'] = 20
+
+    # 📌 라디오 버튼으로 행 수 선택
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        selected_rows = st.radio(
+            "표시할 행 수",
+            options=[10, int(len(df)/3), int(len(df)/3*2), "전체"],
+            horizontal=True,
+            key='rows_radio'
         )
-    else:
-        button_label = "테이블 펼치기 (전체 행 표시)"
-        # 접힘 상태: height 인자에 픽셀 값을 전달하여 스크롤 가능하게 함
-        st.dataframe(
-            styled_df, # 스타일링 적용된 DF
-            column_config=column_config,
-            width='stretch',
-            height=300, # 접힘: 스크롤 가능한 높이로 제한
-            hide_index=True
-        )
+        
+        # 선택값 처리
+        if selected_rows == "전체":
+            rows_num = len(df)
+        else:
+            rows_num = selected_rows
+
+    # 📌 높이 계산
+    calculated_height = min(35 * rows_num + 38, 2000)
     
-    # 📌 상태 토글 버튼
-    if st.button(button_label, key='dashboard_table_toggle', type='secondary', width='stretch'):
-        st.session_state['dashboard_table_expanded'] = not is_expanded
-        st.rerun()
+    st.dataframe(
+        styled_df,
+        column_config=column_config,
+        width='stretch',
+        height=calculated_height,  # 동적으로 계산된 높이
+        hide_index=True
+    )
 
     # ---------------------------------------------------------
     # 3. 자산 비중 차트 (asset_type 기준으로 변경)
@@ -144,12 +147,12 @@ def show_dashboard(asset_summary_df, usd_rate, lookup_data):
             theta=alt.Theta("total_valuation_amount", stack=True),
         )
         pie = base.mark_arc(outerRadius=100).encode(
-            # 📌 [1-4 요청 반영] Color 인코딩에 한글 컬럼 사용
+            # Color 인코딩에 한글 컬럼 사용
             color=alt.Color("asset_type_kr", title="자산 유형", legend=alt.Legend(orient="bottom", columns=3)),
             tooltip=["asset_type_kr", alt.Tooltip("total_valuation_amount", format=",.0f"), alt.Tooltip("percentage", format=".1f")]
         )
         
-        # 📌 [1-5 요청 반영] 텍스트 레이어 추가 (파이 차트 위에 레이블 표시)
+        # 텍스트 레이어 추가 (파이 차트 위에 레이블 표시)
         text = base.mark_text(radius=120).encode(
             text=alt.Text("label"), # 계산된 한글 + 비중 레이블
             order=alt.Order("total_valuation_amount", sort="descending"), 

@@ -1,6 +1,7 @@
 # 모든 기능을 하나로 묶어주는 파일입니다. 기존의 3탭 구조를 완벽하게 복원했습니다.
 # main.py
 import streamlit as st
+import pandas as pd
 from datetime import datetime
 
 # 모듈 불러오기
@@ -9,7 +10,11 @@ from views.dashboard import show_dashboard
 from views.transaction_editor import show_transaction_editor
 from views.asset_editor import show_asset_editor
 from views.account_editor import show_account_editor
-
+# from utils.data_loader import fetch_data, fetch_usd_exchange_rate#, get_lookup_data
+# from views.dashboard import show_dashboard
+# from views.transaction_editor import show_transaction_editor
+# from views.asset_editor import show_asset_editor
+# from views.account_editor import show_account_editor
 
 # ----------------------------------------------------
 # 임시(디버깅 중)
@@ -137,6 +142,35 @@ st.caption(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 # ----------------------------------------------------
 # 4. 탭 구성 (기존 3개 탭 구조 복원)
 # ----------------------------------------------------
+# 탭을 상단에 고정하는 CSS
+st.markdown("""
+    <style>
+    /* 탭 바 전체를 고정 */
+    section[data-testid="stHorizontalBlock"] > div:has(div[data-baseweb="tab-list"]) {
+        position: sticky !important;
+        top: 0 !important;
+        background-color: white !important;
+        z-index: 999 !important;
+        padding: 1rem 0 0.5rem 0;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    
+    /* 탭 리스트 자체도 고정 */
+    div[data-baseweb="tab-list"] {
+        position: sticky !important;
+        top: 0 !important;
+        background-color: white !important;
+        z-index: 1000 !important;
+    }
+    
+    /* 다크모드 */
+    [data-theme="dark"] section[data-testid="stHorizontalBlock"] > div:has(div[data-baseweb="tab-list"]),
+    [data-theme="dark"] div[data-baseweb="tab-list"] {
+        background-color: #0e1117 !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 tab1, tab2, tab3, tab4 = st.tabs(["📊 대시보드", "📝 거래 기록 편집", "💼 자산 정보 관리", "🏦 계좌 정보 관리"]) # 📌 [수정] 탭 4개
 
 lookup_data = get_lookup_data()
@@ -152,3 +186,14 @@ with tab3:
     
 with tab4: # 📌 [추가] 계좌 관리 탭
     show_account_editor(df_accounts, lookup_data) 
+
+
+# [ToDo]
+# ASAP)transaction_editor에서 row 삭제 기능 필요: 이거 안하면 실행 안됨
+# 1)transaction_editor에서 거래내역 추가/수정/삭제 내용을 asset_summary에 반영하는 로직
+# 1-1)위 2번의 내역을 바탕으로 개별 종목 손익률 차트 만들기
+# 2)Ticker 없는 종목들 현재가 크롤링 로직 추가
+# 3)현재가 기준으로 매일 asset_summary 테이블 snapshot 만드는 로직 추가
+# 3-1)asset_summary snapshot으로 포트폴리오 전체 수익률 history 차트 만들기(portfolio_pnl_history 테이블 업데이트 로직)
+# 4)asset_summary 테이블을 현 시점 데이터로 채우고 앱 Launching
+# 5)asset_summary 테이블 history 만들기(portfolio_pnl_history 테이블 업데이트 로직 및 해당 차트)

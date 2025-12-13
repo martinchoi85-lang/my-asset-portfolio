@@ -36,10 +36,15 @@ def show_account_editor(df_accounts, lookup_data):
 
     display_cols = [c for c in df_accounts.columns if c != 'id']
 
+    row_count = len(df_accounts)
+    calculated_height = min(35 * row_count + 38, 2000)  # 최대 2000px
+
     edited_df = st.data_editor(
-        df_accounts[display_cols],
+        df_accounts[display_cols].sort_values(by=['owner', 'brokerage', 'name'], ascending=[False, True, True]),
         num_rows="dynamic",
+        height=calculated_height,
         width='stretch',
+        hide_index=True,
         column_config=column_config,
         key="account_editor"
     )
