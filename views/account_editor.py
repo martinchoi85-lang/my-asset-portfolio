@@ -44,7 +44,7 @@ def show_account_editor(df_accounts, lookup_data):
         num_rows="dynamic",
         height=calculated_height,
         width='stretch',
-        hide_index=True,
+        # hide_index=True,
         column_config=column_config,
         key="account_editor"
     )

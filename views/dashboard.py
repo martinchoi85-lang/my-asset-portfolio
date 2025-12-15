@@ -127,7 +127,7 @@ def show_dashboard(asset_summary_df, usd_rate, lookup_data):
     # 3. 자산 비중 차트 (asset_type 기준으로 변경)
     # ---------------------------------------------------------
     st.subheader("📈 자산 유형별 비중")
-    
+
     if 'asset_type' in asset_summary_df.columns:
         grouped_df = asset_summary_df.groupby('asset_type', dropna=True).agg(
             total_valuation_amount=('total_valuation_amount', 'sum')
@@ -143,23 +143,34 @@ def show_dashboard(asset_summary_df, usd_rate, lookup_data):
         # 레이블 형식: 한글명 (XX.X%)
         grouped_df['label'] = grouped_df['asset_type_kr'] + ' (' + grouped_df['percentage'].round(1).astype(str) + '%)'
 
+        # --- 👇 이 부분에서 정렬을 명시합니다. 👇 ---
+        order_encoding = alt.Order("total_valuation_amount", sort="descending") 
+        # --- 👆 이 부분에서 정렬을 명시합니다. 👆 ---
+        
         base = alt.Chart(grouped_df).encode(
             theta=alt.Theta("total_valuation_amount", stack=True),
+        ).properties(
+            title="자산 유형별 비중",
+            height=300, # 텍스트 레이블을 포함할 충분한 높이(바로 위 테이블과 겹치는 문제 해결)
+            width=300   # 적절한 너비
         )
+        
+        # pie 차트에 order 인코딩 추가
         pie = base.mark_arc(outerRadius=100).encode(
             # Color 인코딩에 한글 컬럼 사용
             color=alt.Color("asset_type_kr", title="자산 유형", legend=alt.Legend(orient="bottom", columns=3)),
-            tooltip=["asset_type_kr", alt.Tooltip("total_valuation_amount", format=",.0f"), alt.Tooltip("percentage", format=".1f")]
+            tooltip=["asset_type_kr", alt.Tooltip("total_valuation_amount", format=",.0f"), alt.Tooltip("percentage", format=".1f")],
+            order=order_encoding # 👈 추가: 파이 조각 배치 순서 지정
         )
         
         # 텍스트 레이어 추가 (파이 차트 위에 레이블 표시)
         text = base.mark_text(radius=120).encode(
             text=alt.Text("label"), # 계산된 한글 + 비중 레이블
-            order=alt.Order("total_valuation_amount", sort="descending"), 
+            order=order_encoding, # 👈 유지/수정: 파이 조각 배치 순서와 동일하게 지정
             color=alt.value("black") 
         )
         
         chart = pie + text # 차트 합치기
-        st.altair_chart(chart, width='stretch')
+        st.altair_chart(chart, width='stretch') # width='stretch' 대신 width='stretch'를 권장
     else:
         st.warning("`asset_summary` 뷰에 `asset_type` 컬럼이 없어 차트를 그릴 수 없습니다.")

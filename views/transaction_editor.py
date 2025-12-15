@@ -117,7 +117,7 @@ def show_transaction_editor(df_transactions, lookup_data):
         num_rows="dynamic", 
         height=calculated_height,
         width='stretch',
-        hide_index=True,  # 이제 정상 작동!
+        # hide_index=True,  # 이제 정상 작동!
         column_config=column_config,
         key="transaction_editor"
     )

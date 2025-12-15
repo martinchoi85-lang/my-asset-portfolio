@@ -74,7 +74,7 @@ def show_asset_editor(df_assets_original, lookup_data):
         num_rows="dynamic",
         height=calculated_height,
         width='stretch',
-        hide_index=True,
+        # hide_index=True,
         column_config=column_config,
         key="asset_editor"
     )
