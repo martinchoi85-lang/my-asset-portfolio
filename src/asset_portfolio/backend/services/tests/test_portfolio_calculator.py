@@ -1,5 +1,5 @@
 import pytest
-from asset_portfolio.backend.services.portfolio_calculator import (apply_transactions, calculate_asset_return_series_from_snapshots)
+from src.asset_portfolio.backend.services.portfolio_calculator import (apply_transactions, calculate_asset_return_series_from_snapshots)
 
 # =========================
 # TC1: 단일 매수, 가격 상승

@@ -1,103 +1,133 @@
-import pandas as pd
+from datetime import date, timedelta
+from asset_portfolio.backend.services.portfolio_calculator import (
+    calculate_daily_snapshots_for_asset
+)
+from asset_portfolio.backend.infra.supabase_client import get_supabase_client
+
+
 from datetime import date
-from collections import defaultdict
-from src.asset_portfolio.backend.services.portfolio_service import calculate_asset_summary
-from src.asset_portfolio.backend.services.portfolio_calculator import apply_transactions
-from src.asset_portfolio.backend.infra.supabase_client import get_supabase_client
+from asset_portfolio.backend.infra.supabase_client import get_supabase_client
+from asset_portfolio.backend.services.portfolio_calculator import (
+    calculate_daily_snapshots_for_asset
+)
 
 
-def generate_daily_snapshots(snapshot_date: date):
+def generate_daily_snapshots(account_id: str, start_date: date, end_date: date):
     """
-    특정 날짜 기준으로 daily_snapshots 테이블을 생성/재생성한다.
-
-    - snapshot_date 이전의 모든 거래를 기준으로 계산
-    - 부분 매도, 전량 매도 모두 반영
+    특정 account에 대해
+    거래가 존재하는 모든 자산의 daily snapshot을 생성한다.
     """
 
     supabase = get_supabase_client()
 
     # =========================
-    # 1. 거래 내역 조회
+    # 1. 거래가 존재하는 asset_id 목록 조회
     # =========================
-    transactions = (
-        supabase
-        .table("transactions")
-        .select("*")
-        .lte("transaction_date", snapshot_date.isoformat())
-        .order("transaction_date")
+    tx_resp = (
+        supabase.table("transactions")
+        .select("asset_id")
+        .eq("account_id", account_id)
         .execute()
-        .data
     )
 
-    if not transactions:
-        return 0
+    asset_ids = sorted(
+        {row["asset_id"] for row in (tx_resp.data or [])}
+    )
+
+    if not asset_ids:
+        print(f"[INFO] account_id={account_id} 에 대한 거래 내역이 없습니다.")
+        return
 
     # =========================
-    # 2. 자산별 / 계좌별 거래 묶기
+    # 2. 자산별 snapshot 생성
     # =========================
-    grouped = defaultdict(list)
-
-    for tx in transactions:
-        key = (tx["asset_id"], tx["account_id"])
-        grouped[key].append(tx)
-
-    snapshots = []
-
-    # =========================
-    # 3. 각 자산-계좌 조합별 계산
-    # =========================
-    for (asset_id, account_id), tx_list in grouped.items():
-
-        # 거래 내역을 계산기에 전달
-        result = apply_transactions(tx_list)
-
-        # 전량 매도된 경우 snapshot 생성하지 않음
-        if result["quantity"] <= 0:
-            continue
-
-        # =========================
-        # 현재가 조회 (assets 테이블 기준)
-        # =========================
-        asset = (
-            supabase
-            .table("assets")
-            .select("current_price, currency")
-            .eq("id", asset_id)
-            .single()
-            .execute()
-            .data
+    for asset_id in asset_ids:
+        snapshots = calculate_daily_snapshots_for_asset(
+            asset_id=asset_id,
+            account_id=account_id,
+            start_date=start_date,
+            end_date=end_date,
         )
 
-        current_price = float(asset["current_price"])
-        currency = asset["currency"]
+        if not snapshots:
+            continue
 
-        # =========================
-        # snapshot 레코드 생성
-        # =========================
-        snapshot = {
-            "date": snapshot_date.isoformat(),
-            "asset_id": asset_id,
-            "account_id": account_id,
-            "quantity": result["quantity"],
-            "purchase_price": result["average_price"],
-            "purchase_amount": result["remaining_cost"],
-            "valuation_price": current_price,
-            "valuation_amount": result["quantity"] * current_price,
-            "currency": currency,
-        }
+        # -------------------------
+        # 3. DB insert
+        # -------------------------
 
-        snapshots.append(snapshot)
+        # 🔽 날짜 타입을 문자열로 변환 (JSON 직렬화 대응)
+        for row in snapshots:
+            if isinstance(row.get("date"), (date,)):
+                row["date"] = row["date"].isoformat()
 
-    # =========================
-    # 4. 기존 snapshot 삭제 후 재삽입
-    # =========================
-    supabase.table("daily_snapshots") \
-        .delete() \
-        .eq("date", snapshot_date.isoformat()) \
-        .execute()
-
-    if snapshots:
         supabase.table("daily_snapshots").insert(snapshots).execute()
 
-    return len(snapshots)
+        print(
+            f"[OK] asset_id={asset_id}, "
+            f"{len(snapshots)} rows inserted"
+        )
 
+
+# def generate_daily_snapshots(
+#     account_id: str,
+#     start_date: date,
+#     end_date: date,
+# ):
+#     """
+#     - 특정 계좌(account_id)에 대해 start_date ~ end_date 기간의 
+#       daily_snapshots를 생성, 결과를 DB(daily_snapshots)에 저장
+
+#     - 기존 데이터가 있으면 upsert
+#     - 여러 번 실행해도 결과가 안정적으로 유지됨
+#     """
+
+#     supabase = get_supabase_client()
+
+#     # =========================
+#     # 1. 계좌에 속한 자산 목록 조회
+#     # =========================
+#     assets_resp = (
+#         supabase.table("assets")
+#         .select("id")
+#         .eq("account_id", account_id)
+#         .execute()
+#     )
+
+#     assets = assets_resp.data or []
+
+#     if not assets:
+#         print(f"[WARN] account_id={account_id} 에 자산이 없습니다.")
+#         return
+
+#     # =========================
+#     # 2. 자산별 daily snapshot 생성
+#     # =========================
+#     for asset in assets:
+#         asset_id = asset["id"]
+
+#         print(f"[INFO] asset_id={asset_id} snapshot 생성 중")
+
+#         snapshots = calculate_daily_snapshots_for_asset(
+#             asset_id=asset_id,
+#             account_id=account_id,
+#             start_date=start_date,
+#             end_date=end_date,
+#         )
+
+#         if not snapshots:
+#             continue
+
+#         # =========================
+#         # 3. daily_snapshots upsert
+#         # =========================
+#         (
+#             supabase.table("daily_snapshots")
+#             .upsert(
+#                 snapshots,
+#                 on_conflict="date,asset_id,account_id",
+#             )
+#             .execute()
+#         )
+
+#     print("[DONE] daily_snapshots 생성 완료")
