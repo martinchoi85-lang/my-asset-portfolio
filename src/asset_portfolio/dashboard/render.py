@@ -1,9 +1,166 @@
 import pandas as pd
 import streamlit as st
+from datetime import date, timedelta
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
+from asset_portfolio.backend.services.portfolio_weight_service import (
+    load_asset_weight_timeseries,
+    build_asset_weight_df,
+)
+from asset_portfolio.backend.services.portfolio_service import (
+    get_portfolio_return_series
+)
+from asset_portfolio.backend.services.benchmark_service import (
+    load_cash_benchmark_series,
+    merge_portfolio_and_benchmark,
+    load_sp500_benchmark_series
+)
+
+def render_portfolio_return_section(account_id, start_date, end_date):
+    st.subheader("📈 Portfolio 전체 수익률")
+
+    if not account_id:
+        st.info("계좌를 선택해주세요.")
+        return
+
+    # ============================
+    # 데이터 로드
+    # ============================
+    df = get_portfolio_return_series(
+        account_id=account_id,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    if df.empty:
+        st.warning("조회된 데이터가 없습니다.")
+        return
+
+    # ============================
+    # 기본 전처리
+    # ============================
+    df = df.sort_values("date")
+    latest = df.iloc[-1]
+
+    total_purchase = latest["purchase_amount"]
+    total_valuation = latest["valuation_amount"]
+    portfolio_return = latest["portfolio_return"]
+
+    # ============================
+    # 계좌 정보 요약
+    # ============================
+    st.caption(f"선택된 계좌 ID: {account_id}")
+
+    # ============================
+    # KPI 카드 영역
+    # ============================
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        label="총 투자금",
+        value=f"{int(total_purchase):,} 원",
+    )
+
+    col2.metric(
+        label="현재 평가금액",
+        value=f"{int(total_valuation):,} 원",
+        delta=f"{int(total_valuation - total_purchase):,} 원",
+    )
+
+    col3.metric(
+        label="누적 수익률",
+        value=f"{portfolio_return * 100:.2f} %",
+    )
+
+    st.divider()
+
+    # ============================
+    # 누적 수익률 차트
+    # ============================
+    df["portfolio_return_pct"] = df["portfolio_return"] * 100
+
+    st.line_chart(
+        df.set_index("date")["portfolio_return_pct"],
+        height=350,
+    )
+
+    st.caption("※ 누적 수익률 기준 (%)")
+
+    # ============================
+    # 디버깅 / 확인용 데이터
+    # ============================
+    with st.expander("📄 원본 데이터 확인"):
+        st.dataframe(
+            df[
+                [
+                    "date",
+                    "purchase_amount",
+                    "valuation_amount",
+                    "portfolio_return_pct",
+                ]
+            ]
+        )
 
 
-def render_asset_return_section(account_id: str):
+    # ============================
+    # Benchmark 데이터 로드
+    # ============================
+    benchmark_df = load_cash_benchmark_series(start_date, end_date)
+
+    merged_df = merge_portfolio_and_benchmark(
+        portfolio_df=df,
+        benchmark_df=benchmark_df,
+    )
+
+    st.subheader("📊 Portfolio vs Benchmark")
+
+    st.line_chart(
+        merged_df
+            .set_index("date")[
+                ["portfolio_return_pct", "benchmark_return_pct"]
+            ],
+        height=350,
+    )
+
+    st.caption("※ Portfolio vs 현금 기준 수익률 비교 (%)")
+
+
+    # ============================
+    # Benchmark S&P500 데이터 로드
+    # ============================
+    benchmark_df = load_sp500_benchmark_series(
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    merged_df = merge_portfolio_and_benchmark(
+        portfolio_df=df,
+        benchmark_df=benchmark_df,
+    )
+
+    st.subheader("📊 Portfolio vs S&P 500")
+
+    if merged_df.empty:
+        st.info("Benchmark 데이터를 불러올 수 없습니다.")
+    else:
+        st.line_chart(
+            merged_df
+                .set_index("date")[
+                    ["portfolio_return_pct", "benchmark_return_pct"]
+                ],
+            height=350,
+        )
+
+        st.caption("※ Portfolio vs S&P 500 누적 수익률 비교 (%)")
+
+
+
+
+    
+def render_asset_return_section(
+    account_id: str,
+    start_date: str,
+    end_date: str,
+):
     st.subheader("📈 자산별 수익률 추이")
 
     supabase = get_supabase_client()
@@ -27,6 +184,8 @@ def render_asset_return_section(account_id: str):
             """
         )
         .eq("account_id", account_id)
+        .gte("date", start_date)
+        .lte("date", end_date)
         .order("date")
         .execute()
     )
@@ -94,6 +253,12 @@ def render_asset_return_section(account_id: str):
     # 5. 누적 수익률 계산
     # (purchase_amount 기준)
     # ============================
+
+    asset_df = asset_df[
+        (asset_df["valuation_amount"] > 0)
+        & (asset_df["purchase_amount"] > 0)
+    ]
+
     asset_df["return_rate"] = (
         asset_df["valuation_amount"] / asset_df["purchase_amount"] - 1
     )
@@ -120,95 +285,6 @@ def render_asset_return_section(account_id: str):
                 ]
             ]
         )
-
-
-def render_portfolio_return_section(account_id: str):
-    st.subheader("📊 포트폴리오 전체 수익률")
-
-    supabase = get_supabase_client()
-
-    # ============================
-    # 1. daily_snapshots 조회
-    # ============================
-    response = (
-        supabase.table("daily_snapshots")
-        .select(
-            """
-            date,
-            valuation_amount,
-            purchase_amount
-            """
-        )
-        .eq("account_id", account_id)
-        .order("date")
-        .execute()
-    )
-
-    data = response.data or []
-
-    if not data:
-        st.info("포트폴리오 수익률 데이터가 없습니다.")
-        return
-
-    df = pd.DataFrame(data)
-    df["date"] = pd.to_datetime(df["date"])
-
-    # ============================
-    # 2. 날짜별 포트폴리오 합산
-    # ============================
-    portfolio_df = (
-        df.groupby("date", as_index=False)
-        .agg(
-            valuation_amount=("valuation_amount", "sum"),
-            purchase_amount=("purchase_amount", "sum"),
-        )
-        .sort_values("date")
-    )
-
-    # ============================
-    # 3. 누적 수익률 계산
-    # ============================
-    portfolio_df["return_rate"] = (
-        portfolio_df["valuation_amount"]
-        / portfolio_df["purchase_amount"]
-        - 1
-    )
-
-    # ============================
-    # 4. 차트 출력
-    # ============================
-    st.line_chart(
-        portfolio_df.set_index("date")["return_rate"],
-        height=300
-    )
-
-    # ============================
-    # 5. 요약 지표
-    # ============================
-    latest = portfolio_df.iloc[-1]
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric(
-        "총 투자금",
-        f"{latest.purchase_amount:,.0f}"
-    )
-    col2.metric(
-        "현재 평가금",
-        f"{latest.valuation_amount:,.0f}"
-    )
-    col3.metric(
-        "누적 수익률",
-        f"{latest.return_rate:.2%}"
-    )
-
-    # ============================
-    # 6. 데이터 확인
-    # ============================
-    with st.expander("📄 일별 포트폴리오 데이터"):
-        st.dataframe(portfolio_df)
-
-
-
 
 
 def load_accounts():
@@ -259,4 +335,89 @@ def render_account_selector():
     return st.session_state.account_id
 
 
+def resolve_date_range(period: str):
+    """
+    기간 코드(1M, 3M, YTD, ALL)를
+    실제 조회용 start_date, end_date로 변환
+    """
+    end_date = date.today()
 
+    if period == "1M":
+        start_date = end_date - timedelta(days=30)
+    elif period == "3M":
+        start_date = end_date - timedelta(days=90)
+    elif period == "YTD":
+        start_date = date(end_date.year, 1, 1)
+    elif period == "ALL":
+        start_date = None
+    else:
+        raise ValueError(f"Unknown period: {period}")
+
+    return start_date, end_date
+
+
+def render_period_selector():
+    st.sidebar.subheader("📅 기간 선택")
+
+    period = st.sidebar.radio(
+        "조회 기간",
+        options=["1M", "3M", "YTD", "ALL"],
+        index=1  # 기본값: 3M
+    )
+
+    return resolve_date_range(period)
+
+
+def render_asset_weight_section(account_id, start_date, end_date):
+    st.subheader("📊 자산 비중 변화")
+
+    rows = load_asset_weight_timeseries(
+        account_id, start_date, end_date
+    )
+
+    df = build_asset_weight_df(rows)
+
+    if df.empty:
+        st.info("비중 데이터가 없습니다.")
+        return
+
+    pivot = (
+        df.pivot(
+            index="date",
+            columns="asset_name",
+            values="weight"
+        )
+        .fillna(0)
+    )
+
+    st.area_chart(pivot)
+
+
+
+
+
+def render_asset_weight_section(account_id, start_date, end_date):
+    st.subheader("📊 자산 비중 변화")
+
+    rows = load_asset_weight_timeseries(
+        account_id=account_id,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    df = build_asset_weight_df(rows)
+
+    if df.empty:
+        st.info("자산 비중 데이터가 없습니다.")
+        return
+
+    pivot = (
+        df.pivot(
+            index="date",
+            columns="asset_name",
+            values="weight"
+        )
+        .fillna(0)
+    )
+
+    st.area_chart(pivot)

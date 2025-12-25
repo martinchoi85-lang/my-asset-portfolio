@@ -1,4 +1,5 @@
 # src/asset_portfolio/backend/services/portfolio_calculator.py
+import pandas as pd
 from collections import defaultdict
 from datetime import date, timedelta
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
@@ -423,3 +424,43 @@ def calculate_daily_snapshots_for_asset(
 
     return snapshots
 
+
+
+def calculate_portfolio_return_series_from_snapshots(
+    snapshots: List[Dict],
+) -> pd.DataFrame:
+    """
+    daily_snapshots 데이터를 기반으로
+    포트폴리오 전체 누적 수익률 시계열을 계산한다.
+
+    snapshots 예시:
+    [
+        {
+            "date": "2025-01-01",
+            "valuation_amount": 100000,
+            "purchase_amount": 95000,
+        },
+        ...
+    ]
+    """
+
+    if not snapshots:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(snapshots)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date")
+
+    # =========================
+    # 누적 수익률 계산 전 0 이하 snapshot은 필터링
+    # =========================
+    df = df[
+        (df["valuation_amount"] > 0)
+        & (df["purchase_amount"] > 0)
+    ]
+
+    df["portfolio_return"] = (
+        df["valuation_amount"] / df["purchase_amount"] - 1
+    )
+
+    return df[["date", "portfolio_return", "valuation_amount", "purchase_amount"]]

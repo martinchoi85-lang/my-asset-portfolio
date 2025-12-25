@@ -1,9 +1,9 @@
 # src/asset_portfolio/backend/services/portfolio_service.py
-import pandas as pd
-import numpy as np
 from typing import List, Dict
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
-from asset_portfolio.backend.services.portfolio_calculator import calculate_asset_return_series_from_snapshots
+from asset_portfolio.backend.services.portfolio_calculator import (
+    calculate_asset_return_series_from_snapshots, calculate_portfolio_return_series_from_snapshots,
+)
 
 """
 portfolio_service.py
@@ -52,108 +52,62 @@ def get_asset_return_series(
 
 
 
-# def calculate_asset_summary(transactions: pd.DataFrame, assets: pd.DataFrame) -> pd.DataFrame:
-#     """
-#     DB / Supabase / Streamlit에 전혀 의존하지 않는
-#     순수 계산 함수
-#     """
+def load_portfolio_daily_snapshots(
+    account_id: str,
+    start_date: str,
+    end_date: str,
+):
+    """
+    daily_snapshots에서
+    특정 계좌의 포트폴리오 단위 데이터를 date 기준으로 집계
+    """
+    supabase = get_supabase_client()
 
-#     tx = transactions.copy()
+    response = (
+        supabase.table("daily_snapshots")
+        .select("date, valuation_amount, purchase_amount")
+        .eq("account_id", account_id)
+        .gte("date", start_date)
+        .lte("date", end_date)
+        .execute()
+    )
 
-#     tx["quantity"] = pd.to_numeric(tx["quantity"], errors="coerce").fillna(0)
-#     tx["price"] = pd.to_numeric(tx["price"], errors="coerce").fillna(0)
+    rows = response.data or []
 
-#     def signed_qty(row):
-#         if row["trade_type"] in ("BUY", "INIT"):
-#             return row["quantity"]
-#         if row["trade_type"] == "SELL":
-#             return -row["quantity"]
-#         return 0
+    # =========================
+    # date 기준으로 합산
+    # =========================
+    daily_map = {}
 
-#     tx["signed_quantity"] = tx.apply(signed_qty, axis=1)
+    for r in rows:
+        d = r["date"]
+        if d not in daily_map:
+            daily_map[d] = {
+                "date": d,
+                "valuation_amount": 0,
+                "purchase_amount": 0,
+            }
 
-#     tx["purchase_amount"] = np.where(
-#         tx["trade_type"].isin(["BUY", "INIT"]),
-#         tx["quantity"] * tx["price"],
-#         0
-#     )
+        daily_map[d]["valuation_amount"] += float(r["valuation_amount"])
+        daily_map[d]["purchase_amount"] += float(r["purchase_amount"])
 
-#     tx["income_amount"] = np.where(
-#         tx["trade_type"].isin(["DIVIDEND", "DISTRIBUTION"]),
-#         tx["price"],
-#         0
-#     )
-
-#     grouped = tx.groupby(
-#         ["asset_id", "account_id"], dropna=False
-#     ).agg(
-#         total_quantity=("signed_quantity", "sum"),
-#         total_purchase_amount=("purchase_amount", "sum"),
-#         total_income=("income_amount", "sum")
-#     ).reset_index()
-
-#     df = grouped.merge(
-#         assets,
-#         left_on="asset_id",
-#         right_on="id",
-#         how="left"
-#     )
-
-#     df["average_purchase_price"] = np.where(
-#         df["total_quantity"] > 0,
-#         df["total_purchase_amount"] / df["total_quantity"],
-#         0
-#     )
-
-#     df["current_valuation_price"] = df["current_price"].fillna(0)
-
-#     df["total_valuation_amount"] = (
-#         df["total_quantity"] * df["current_valuation_price"]
-#     )
-
-#     df["unrealized_pnl"] = (
-#         df["total_valuation_amount"]
-#         - df["total_purchase_amount"]
-#         + df["total_income"]
-#     )
-
-#     df["unrealized_return_rate"] = np.where(
-#         df["total_purchase_amount"] > 0,
-#         df["unrealized_pnl"] / df["total_purchase_amount"] * 100,
-#         0
-#     )
-
-#     return df[df["total_quantity"] != 0]
+    return sorted(
+        daily_map.values(),
+        key=lambda x: x["date"]
+    )
 
 
 
+def get_portfolio_return_series(
+    account_id: str,
+    start_date: str,
+    end_date: str,
+):
+    """
+    Streamlit / API에서 사용하는 최종 함수
+    """
+    snapshots = load_portfolio_daily_snapshots(
+        account_id, start_date, end_date
+    )
 
-# def calculate_asset_return_series(daily_snapshots):
-#     """
-#     daily_snapshots: [
-#       {
-#         date,
-#         purchase_amount,
-#         valuation_amount
-#       }
-#     ]
-#     """
-#     results = []
-
-#     for s in daily_snapshots:
-#         purchase = float(s["purchase_amount"])
-#         valuation = float(s["valuation_amount"])
-
-#         if purchase == 0:
-#             return_rate = 0.0
-#         else:
-#             return_rate = (valuation - purchase) / purchase
-
-#         results.append({
-#             "date": s["date"],
-#             "return_rate": return_rate,
-#             "valuation_amount": valuation,
-#             "purchase_amount": purchase,
-#         })
-
-#     return results
+    return calculate_portfolio_return_series_from_snapshots(snapshots)
