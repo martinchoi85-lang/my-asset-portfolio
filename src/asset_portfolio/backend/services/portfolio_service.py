@@ -1,6 +1,8 @@
 # src/asset_portfolio/backend/services/portfolio_service.py
+import pandas as pd
 from typing import List, Dict
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
+from asset_portfolio.dashboard.data import build_daily_snapshots_query
 from asset_portfolio.backend.services.portfolio_calculator import (
     calculate_asset_return_series_from_snapshots, calculate_portfolio_return_series_from_snapshots,
 )
@@ -28,24 +30,14 @@ def get_asset_return_series(
     2. calculator로 전달
     3. 계산 결과 반환
     """
-
-    supabase = get_supabase_client()
-
-    response = (
-        supabase
-        .table("daily_snapshots")
-        .select(
-            "date, purchase_amount, valuation_amount"
-        )
-        .eq("asset_id", asset_id)
-        .eq("account_id", account_id)
-        .gte("date", start_date)
-        .lte("date", end_date)
-        .order("date")
-        .execute()
+    query = build_daily_snapshots_query(
+        select_cols="date, purchase_amount, valuation_amount",
+        start_date=start_date,
+        end_date=end_date,
+        account_id=account_id,
     )
 
-    snapshots = response.data or []
+    snapshots = query.execute().data or []
 
     # calculator는 DB를 모른다
     return calculate_asset_return_series_from_snapshots(snapshots)
@@ -61,25 +53,21 @@ def load_portfolio_daily_snapshots(
     daily_snapshots에서
     특정 계좌의 포트폴리오 단위 데이터를 date 기준으로 집계
     """
-    supabase = get_supabase_client()
-
-    response = (
-        supabase.table("daily_snapshots")
-        .select("date, valuation_amount, purchase_amount")
-        .eq("account_id", account_id)
-        .gte("date", start_date)
-        .lte("date", end_date)
-        .execute()
+    query = build_daily_snapshots_query(
+        select_cols="date, purchase_amount, valuation_amount",
+        start_date=start_date,
+        end_date=end_date,
+        account_id=account_id,
     )
 
-    rows = response.data or []
+    snapshots = query.execute().data or []
 
     # =========================
     # date 기준으로 합산
     # =========================
     daily_map = {}
 
-    for r in rows:
+    for r in snapshots:
         d = r["date"]
         if d not in daily_map:
             daily_map[d] = {
@@ -88,26 +76,106 @@ def load_portfolio_daily_snapshots(
                 "purchase_amount": 0,
             }
 
-        daily_map[d]["valuation_amount"] += float(r["valuation_amount"])
-        daily_map[d]["purchase_amount"] += float(r["purchase_amount"])
+        daily_map[d]["valuation_amount"] += float(r["valuation_amount"] or 0)
+        daily_map[d]["purchase_amount"] += float(r["purchase_amount"] or 0)
 
-    return sorted(
-        daily_map.values(),
-        key=lambda x: x["date"]
+    # return sorted(
+    #     daily_map.values(),
+    #     key=lambda x: x["date"]
+    # )
+    # date 순서 정렬 안정화
+    result = list(daily_map.values())
+    result.sort(key=lambda x: x["date"])
+    return result
+
+
+def get_portfolio_return_series(account_id: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    Streamlit / API에서 사용하는 최종 함수
+    """
+    snapshots = load_portfolio_daily_snapshots(account_id, start_date, end_date)
+    return calculate_portfolio_return_series_from_snapshots(snapshots)
+
+
+def calculate_asset_contributions(
+    snapshots: List[Dict],
+) -> pd.DataFrame:
+    """
+    daily_snapshots 기반 자산별 수익률 기여도 계산
+
+    반환:
+    date | asset_id | contribution | contribution_pct
+    """
+
+    if not snapshots:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(snapshots)
+    df["date"] = pd.to_datetime(df["date"])
+
+    # =========================
+    # date, asset_id 기준 정렬
+    # =========================
+    df = df.sort_values(["asset_id", "date"])
+
+    # =========================
+    # 자산별 평가금액 변화
+    # =========================
+    df["prev_valuation"] = df.groupby("asset_id")["valuation_amount"].shift(1)
+    df["delta_valuation"] = df["valuation_amount"] - df["prev_valuation"]
+
+    # =========================
+    # 포트폴리오 전일 총 평가금액
+    # =========================
+    portfolio_prev = (
+        df.groupby("date")["prev_valuation"]
+        .sum()
+        .rename("portfolio_prev_valuation")
+        .reset_index()
     )
 
+    df = df.merge(portfolio_prev, on="date", how="left")
+
+    # =========================
+    # 기여도 계산
+    # =========================
+    
+    # 기여도 "inf%" 표시 방어 로직: inf / NaN 제거
+    # 1) 자산 전일값 없는 행 제거 (첫날)
+    # 2) 포트폴리오 전일 총액이 0/NaN이면 제거
+    df = df.dropna(subset=["prev_valuation", "portfolio_prev_valuation"])
+    df = df[df["portfolio_prev_valuation"] > 0]
+
+    df["contribution"] = df["delta_valuation"] / df["portfolio_prev_valuation"]
+
+    df = df.dropna(subset=["contribution"])
+
+    df["contribution_pct"] = df["contribution"] * 100
+
+    return df[
+        [
+            "date",
+            "asset_id",
+            "contribution",
+            "contribution_pct",
+        ]
+    ]
 
 
-def get_portfolio_return_series(
+def load_asset_contribution_data(
     account_id: str,
     start_date: str,
     end_date: str,
 ):
-    """
-    Streamlit / API에서 사용하는 최종 함수
-    """
-    snapshots = load_portfolio_daily_snapshots(
-        account_id, start_date, end_date
+    supabase = get_supabase_client()
+
+    response = (
+        supabase.table("daily_snapshots")
+        .select("date, asset_id, valuation_amount")
+        .eq("account_id", account_id)
+        .gte("date", start_date)
+        .lte("date", end_date)
+        .execute()
     )
 
-    return calculate_portfolio_return_series_from_snapshots(snapshots)
+    return response.data or []

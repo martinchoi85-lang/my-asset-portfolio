@@ -1,7 +1,7 @@
 import pandas as pd
 import streamlit as st
 from supabase import create_client
-from psycopg2.extras import execute_values
+# from psycopg2.extras import execute_values
 from dotenv import load_dotenv
 import os
 from datetime import datetime
@@ -35,12 +35,14 @@ def get_or_create_account(row):
     account_type = row["계좌"]
     owner = row["owner"]
 
-    resp = supabase.table("accounts") \
-        .select("id") \
-        .eq("brokerage", brokerage) \
-        .eq("type", account_type) \
-        .eq("owner", owner) \
+    resp = (
+        supabase.table("accounts")
+        .select("id")
+        .eq("brokerage", brokerage)
+        .eq("type", account_type)
+        .eq("owner", owner)
         .execute()
+    )
 
     if resp.data:
         return resp.data[0]["id"]
