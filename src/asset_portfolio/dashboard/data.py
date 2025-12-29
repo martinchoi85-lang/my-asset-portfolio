@@ -61,16 +61,15 @@ def build_daily_snapshots_query(
     q = (
         supabase.table("daily_snapshots")
         .select(select_cols)
-        .gte("date", start_date)
-        .lte("date", end_date)
         .order("date")
     )
 
-    # if start_date:
-    #     query = query.gte("date", start_date)
+    # ✅ start_date, end_date, account_id가 있을 때만 필터 적용 (None-safe)
+    if start_date is not None:
+        q = q.gte("date", start_date)
 
-    # if end_date:
-    #     query = query.lte("date", end_date)
+    if end_date is not None:
+        q = q.lte("date", end_date)
 
     if account_id and account_id != ALL_ACCOUNT_TOKEN:
         q = q.eq("account_id", account_id)

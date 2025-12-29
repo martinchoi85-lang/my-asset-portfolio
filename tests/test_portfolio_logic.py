@@ -1,6 +1,6 @@
 # # tests/test_portfolio_logic.py
 # import pandas as pd
-# from src.asset_portfolio.backend.services.portfolio_service import calculate_asset_summary
+# from asset_portfolio.backend.services.portfolio_service import calculate_asset_summary
 
 
 # def test_basic_buy_sell_dividend():

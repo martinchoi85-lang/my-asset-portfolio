@@ -1,6 +1,6 @@
 # src/asset_portfolio/backend/services/tests/test_asset_return_series.py
 
-from src.asset_portfolio.backend.services.portfolio_calculator import (calculate_asset_return_series_from_snapshots)
+from asset_portfolio.backend.services.portfolio_calculator import (calculate_asset_return_series_from_snapshots)
 
 
 def test_cumulative_return_calculation():

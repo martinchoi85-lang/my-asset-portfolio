@@ -358,12 +358,7 @@ def apply_transactions(transactions):
     }
 
 
-def calculate_daily_snapshots_for_asset(
-    asset_id: int,
-    account_id: str,
-    start_date: date,
-    end_date: date,
-):
+def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_date: date, end_date: date):
     """
     특정 자산에 대해 일별 snapshot 데이터를 계산한다.
     (DB 저장 X, 계산 결과만 반환)
@@ -376,11 +371,10 @@ def calculate_daily_snapshots_for_asset(
     - 전량 매도/출금 후에도 quantity=0 row는 유지(스냅샷 연속성)
     - 현금 자산은 valuation_price=1 고정, valuation_amount=quantity
     """
-
     supabase = get_supabase_client()
 
     # =========================
-    # 1) 거래 내역 조회
+    # 1) 거래 조회(기존과 동일)
     # =========================
     tx_resp = (
         supabase.table("transactions")
@@ -395,121 +389,108 @@ def calculate_daily_snapshots_for_asset(
         return []
 
     # =========================
-    # 2) 자산 기본 정보 조회
-    #    - currency: 통화 표시용
-    #    - asset_type: 현금(cash) 여부 판별용
+    # 2) 자산 메타 조회: currency, asset_type, current_price
+    # ✅ valuation_price를 current_price로 쓰기 위해 current_price를 반드시 가져옵니다.
     # =========================
     asset_resp = (
         supabase.table("assets")
-        .select("currency, asset_type")
+        .select("currency, asset_type, current_price")
         .eq("id", asset_id)
         .single()
         .execute()
     )
-    currency = asset_resp.data.get("currency")
-    asset_type = (asset_resp.data.get("asset_type") or "").lower()
+    asset_row = asset_resp.data or {}
+    currency = asset_row.get("currency")
+    asset_type = (asset_row.get("asset_type") or "").lower()
 
-    # ✅ 현금 자산 여부 (권장: asset_type='cash'로 고정)
+    # ✅ 현금 자산은 평가단가 1 고정
     is_cash = (asset_type == "cash")
 
-    # =========================
-    # 3) 날짜 루프(스냅샷 생성)
-    # =========================
-    snapshots = []
+    # ✅ 비현금 자산은 assets.current_price를 평가단가로 사용 (V1.1)
+    # - 주의: 이 값은 과거 날짜에도 동일하게 적용됩니다. (가격 히스토리 테이블 도입 전까지의 한계)
+    current_price = float(asset_row.get("current_price") or 0)
 
-    # ✅ quantity와 purchase_amount는 “누적 상태”로 유지됩니다.
+    # =========================
+    # 3) 누적 상태 변수(기존과 동일)
+    # =========================
     current_qty = 0.0
     total_purchase_amount = 0.0
 
+    snapshots = []
     current_date = start_date
     tx_idx = 0
 
     while current_date <= end_date:
-        # ------------------------------------
-        # (A) 현재 날짜까지의 거래를 누적 반영
-        # ------------------------------------
+        # -------------------------
+        # (A) 오늘까지의 거래 반영
+        # -------------------------
         while tx_idx < len(transactions) and _to_date(transactions[tx_idx]["transaction_date"]) <= current_date:
             tx = transactions[tx_idx]
-
             trade_type = tx["trade_type"]
             qty = float(tx["quantity"])
             price = float(tx["price"])
 
-            # -------------------------
-            # 매수/초기반영: 수량 +, 원가 +
-            # -------------------------
+            # ✅ BUY/INIT: 수량 증가, 원가 증가
             if trade_type in ("BUY", "INIT"):
                 current_qty += qty
                 total_purchase_amount += qty * price
 
-            # -------------------------
-            # 매도: 평균단가 기준으로 원가 -, 수량 -
-            # -------------------------
+            # ✅ SELL: 평균단가 기준 원가 차감, 수량 감소
             elif trade_type == "SELL":
-                if current_qty > 0:
-                    avg_price = total_purchase_amount / current_qty
-                else:
-                    avg_price = 0.0
-
-                # ✅ 매도한 수량의 원가만큼 purchase_amount 감소
+                avg_price = (total_purchase_amount / current_qty) if current_qty > 0 else 0.0
                 total_purchase_amount -= avg_price * qty
                 current_qty -= qty
-
-                # ✅ 전량 매도 시 정리(0 유지 정책)
+                # ✅ 전량 매도 시 0으로 정리(0-row는 유지)
                 if current_qty <= 0:
                     current_qty = 0.0
                     total_purchase_amount = 0.0
 
-            # -------------------------
-            # 현금 입금/출금: quantity=금액(잔고) 모델
-            # - price는 1로 들어오는 것을 전제로 함
-            # -------------------------
+            # ✅ 현금 입금/출금: cash 자산에서만 허용, price=1
             elif trade_type == "DEPOSIT":
-                # ✅ 현금 자산이 아닌데 DEPOSIT이 들어오면 데이터 품질 이슈이므로 무시/예외 중 택1
-                # V1에서는 방어적으로 예외를 권장
                 if not is_cash:
-                    raise ValueError("DEPOSIT은 cash 자산에서만 허용됩니다. (asset_type='cash' 확인)")
+                    raise ValueError("DEPOSIT은 cash 자산에서만 허용됩니다. assets.asset_type='cash' 확인")
                 current_qty += qty
-                total_purchase_amount += qty * price  # price=1 → purchase_amount += qty
+                total_purchase_amount += qty * price  # price=1 → +qty
 
             elif trade_type == "WITHDRAW":
                 if not is_cash:
-                    raise ValueError("WITHDRAW는 cash 자산에서만 허용됩니다. (asset_type='cash' 확인)")
+                    raise ValueError("WITHDRAW는 cash 자산에서만 허용됩니다. assets.asset_type='cash' 확인")
                 current_qty -= qty
-                total_purchase_amount -= qty * price  # price=1 → purchase_amount -= qty
-
-                # ✅ 잔고가 0 이하가 되면 0으로 정리
+                total_purchase_amount -= qty * price  # price=1 → -qty
                 if current_qty <= 0:
                     current_qty = 0.0
                     total_purchase_amount = 0.0
 
-            # -------------------------
-            # DIVIDEND는 이번 V1에서는 별도 메뉴로 분리하기로 했으므로
-            # 여기서는 “영향 없음”으로 처리(또는 향후 확장)
-            # -------------------------
+            # ✅ DIVIDEND는 V1에서 별도 editor로 분리 (여기서는 영향 없음)
             elif trade_type == "DIVIDEND":
                 pass
 
             tx_idx += 1
 
-        # ------------------------------------
-        # (B) valuation_price 결정
-        # ------------------------------------
+        # -------------------------
+        # (B) 평가단가(valuation_price) 결정
+        # -------------------------
         if is_cash:
-            # ✅ 현금은 평가단가 1 고정
+            # ✅ cash: 단가 1 고정
             valuation_price = 1.0
         else:
-            # ✅ V1: 현재가 데이터가 아직 없으므로, 임시로 평균매입단가를 평가단가로 사용
-            # (향후 assets.current_price 업데이트 로직이 붙으면 여기 로직을 교체)
-            valuation_price = (total_purchase_amount / current_qty) if current_qty > 0 else 0.0
-
-        # ------------------------------------
-        # (C) 금액 계산
-        # ------------------------------------
+            # ✅ 비현금: current_price 사용 (V1.1)
+            # - current_price가 0이면 “가격 업데이트가 안 된 상태”이므로,
+            #   임시로 평균매입단가를 fallback으로 사용하면 대시보드가 덜 비게 됩니다.
+            if current_price and current_price > 0:
+                valuation_price = current_price
+            else:
+                # ✅ 방어: 가격이 없을 때는 평균매입단가로 임시 대체
+                # valuation_price = purchase_price
+                valuation_price = (total_purchase_amount / current_qty) if current_qty > 0 else 0.0
+        
+        # -------------------------
+        # (C) 금액/단가 계산
+        # -------------------------
         valuation_amount = current_qty * valuation_price
         purchase_price = (total_purchase_amount / current_qty) if current_qty > 0 else 0.0
 
-        # ✅ 핵심: quantity=0이어도 row를 “계속 남김” (0-row 유지 정책)
+        # ✅ 요구사항: quantity=0이어도 row를 유지 (차트에서는 0이 사실상 보이지 않도록 필터링 가능)
         snapshots.append({
             "date": current_date,
             "asset_id": asset_id,
@@ -531,20 +512,11 @@ def calculate_portfolio_return_series_from_snapshots(
     snapshots: List[Dict],
 ) -> pd.DataFrame:
     """
-    daily_snapshots 데이터를 기반으로
-    포트폴리오 전체 누적 수익률 시계열을 계산한다.
-
-    snapshots 예시:
-    [
-        {
-            "date": "2025-01-01",
-            "valuation_amount": 100000,
-            "purchase_amount": 95000,
-        },
-        ...
-    ]
+    daily_snapshots 데이터를 기반으로 포트폴리오 전체 누적 수익률 시계열을 계산한다.
+    - purchase_amount/valuation_amount 조건으로 행을 통째로 삭제하지 않는다.
+    - purchase_amount가 0이면 해당 일자의 return은 NaN으로 두고,
+      이후 구간에서 forward-fill로 시계열을 유지한다.
     """
-
     if not snapshots:
         return pd.DataFrame()
 
@@ -552,16 +524,16 @@ def calculate_portfolio_return_series_from_snapshots(
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date")
 
-    # =========================
-    # 누적 수익률 계산 전 0 이하 snapshot은 필터링
-    # =========================
-    df = df[
-        (df["valuation_amount"] > 0)
-        & (df["purchase_amount"] > 0)
-    ]
+    # ✅ 숫자형 변환/결측 방어
+    df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce")
+    df["purchase_amount"] = pd.to_numeric(df["purchase_amount"], errors="coerce")
 
-    df["portfolio_return"] = (
-        df["valuation_amount"] / df["purchase_amount"] - 1
-    )
+    # ✅ purchase_amount가 0이거나 NaN이면 return 계산이 불가하므로 NaN 처리
+    df["portfolio_return"] = None
+    mask = (df["purchase_amount"] > 0) & (df["valuation_amount"] >= 0)
+    df.loc[mask, "portfolio_return"] = df.loc[mask, "valuation_amount"] / df.loc[mask, "purchase_amount"] - 1
+
+    # ✅ 시계열 유지: return이 비는 구간은 이전 값으로 채움(원하면 0으로 채워도 됨)
+    df["portfolio_return"] = pd.to_numeric(df["portfolio_return"], errors="coerce").ffill().fillna(0.0)
 
     return df[["date", "portfolio_return", "valuation_amount", "purchase_amount"]]

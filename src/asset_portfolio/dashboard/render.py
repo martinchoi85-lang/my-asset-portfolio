@@ -88,11 +88,15 @@ def render_portfolio_return_section(account_id: str, start_date: str, end_date: 
     # 5) 차트 데이터 구성 (포트폴리오 vs 벤치마크)
     # =========================
     chart_df = portfolio_df[["date", "portfolio_return"]].copy()
+
+    # ✅ datetime → date로 변환해서 시간 표시를 제거합니다.
+    chart_df["date"] = pd.to_datetime(chart_df["date"]).dt.date
+
     chart_df["portfolio_return_pct"] = chart_df["portfolio_return"] * 100
 
     if not benchmark_df.empty:
         b = benchmark_df.copy()
-        b["date"] = pd.to_datetime(b["date"])
+        b["date"] = pd.to_datetime(b["date"]).dt.date
         b["benchmark_return_pct"] = b["benchmark_return"] * 100
 
         chart_df = chart_df.merge(
@@ -114,7 +118,7 @@ def render_portfolio_return_section(account_id: str, start_date: str, end_date: 
     with st.expander("📄 원본 데이터 확인"):
         st.dataframe(chart_df)
 
-    st.caption("※ 누적 수익률 기준(%) / 벤치마크 날짜 기준으로 portfolio를 forward-fill 적용")
+    st.caption("※ portfolio_return_pct는 선택한 기간의 포트폴리오 수익률(%)을 의미합니다. (기준일 대비 자산 가치가 얼마나 증가/감소했는지를 비율로 표시)")
 
     
 def render_asset_return_section(
@@ -219,6 +223,7 @@ def render_asset_return_section(
     # ============================
     # 6. 차트 출력
     # ============================
+    asset_df["date"] = pd.to_datetime(asset_df["date"]).dt.date  # 시간 제거
     st.line_chart(
         asset_df.set_index("date")["return_rate"],
         height=300
@@ -271,10 +276,6 @@ def render_account_selector():
     # ✅ 전체 계좌 옵션 추가 (맨 위)
     options = {"전체 계좌 (ALL)": "__ALL__", **options}
 
-    # session_state에 기본값 설정
-    # if "selected_account_label" not in st.session_state:
-    #     st.session_state.selected_account_label = labels[0]
-
     # 계좌 선택 UI
     selected_label = st.sidebar.selectbox(
         "조회할 계좌를 선택하세요",
@@ -283,11 +284,6 @@ def render_account_selector():
         key="account_selector_label",
     )
 
-    # 선택 결과를 session_state에 반영
-    # st.session_state.selected_account_label = selected_label
-    # st.session_state.account_id = options[selected_label]
-
-    # return st.session_state.account_id
     return options[selected_label]
 
 
@@ -318,7 +314,7 @@ def render_period_selector():
     period = st.sidebar.radio(
         "조회 기간",
         options=["1M", "3M", "YTD", "ALL"],
-        index=1  # 기본값: 3M
+        index=0  # 기본값: 3M
     )
 
     return resolve_date_range(period)
@@ -390,7 +386,8 @@ def render_asset_weight_section(account_id, start_date, end_date):
 
     # =========================
     # ✅ pivot은 asset_id로 (name_kr 변경/중복 대비)
-    # =========================
+    # =========================    
+    df["date"] = pd.to_datetime(df["date"]).dt.date  # 시간 제거
     pivot = (
         df.pivot_table(
             index="date",
@@ -493,7 +490,9 @@ def render_asset_contribution_stacked_area(
     )
     top_assets = set(latest_cum.head(top_n)["asset_id"].tolist())
     df_plot = df[df["asset_id"].isin(top_assets)].copy()
-
+    # df_plot["date"] = pd.to_datetime(df_plot["date"]).dt.strftime("%Y-%m-%d")
+    df_plot["date"] = pd.to_datetime(df_plot["date"])  # ✅ datetime 유지
+    
     # =========================
     # Altair stacked area
     # =========================
@@ -501,7 +500,12 @@ def render_asset_contribution_stacked_area(
         alt.Chart(df_plot)
         .mark_area()
         .encode(
-            x=alt.X("date:T", title="Date"),
+            # 2번 방법: axis format을 날짜만 나오도록 강제
+            x=alt.X("date:T", title="Date", axis=alt.Axis(format="%Y-%m-%d")),
+            # 문자열 날짜는 O(Ordinal)로 처리 → 시간(12 PM) 표시가 사라짐
+            # 날짜를 “시간 데이터”가 아니라 “범주(ordered)”로 처리(단점: 기간이 길면 틱이 너무 많아질 수 있습니다.)
+            # x=alt.X("date:O", title="Date"),
+            # x=alt.X("date:T", title="Date"),
             y=alt.Y("cum_contribution_pct:Q", stack="zero", title="누적 기여도(%)"),
             color=alt.Color("name_kr:N", title="자산"),
             tooltip=[
@@ -534,15 +538,32 @@ def render_portfolio_treemap(
         st.info("계좌를 선택해주세요.")
         return
 
-    mode = st.radio(
-        "Treemap 기준",
-        ["현재 비중(평가금액)", "기간 누적 기여도"],
-        horizontal=True,
-    )
+    mode = st.radio("Treemap 모드", ["현재 비중(평가금액)", "기간 누적 기여도"], index=0, horizontal=True)
+
+    # ✅ Plotly 표시용 한글 라벨 (hover, legend 등에 반영)
+    LABELS = {
+        "valuation_amount": "평가금액",
+        "name_kr": "자산명",
+        "asset_type": "자산유형",
+        "market": "시장",
+        "cum_pct": "누적 기여도(%)",
+        "abs_cum": "누적 기여도(절대)",
+    }
 
     assets = load_assets_lookup()
 
+    # ✅ Plotly 표시용 한글 라벨 (hover, legend 등에 반영)
+    LABELS = {
+        "valuation_amount": "평가금액",
+        "name_kr": "자산명",
+        "asset_type": "자산유형",
+        "market": "시장",
+        "cum_pct": "누적 기여도(%)",
+        "abs_cum": "누적 기여도(절대)",
+    }
+
     if mode == "현재 비중(평가금액)":
+        # df_w는 최소 컬럼: ['asset_id','valuation_amount','name_kr','asset_type','market'] 를 가지도록 준비
         df_w = load_latest_asset_weights(account_id, start_date, end_date)
         if df_w.empty:
             st.warning("해당 기간에 daily_snapshots 데이터가 없습니다.")
@@ -550,6 +571,13 @@ def render_portfolio_treemap(
 
         df_w = df_w.merge(assets[["asset_id", "name_kr", "asset_type", "market"]], on="asset_id", how="left")
         df_w["name_kr"] = df_w["name_kr"].fillna(df_w["asset_id"].astype(str))
+
+        leaf_count = int(df_w["asset_id"].nunique())  # ✅ 말단 개수 근사
+
+        # ✅ 말단이 적으면 더 크게, 많으면 덜 크게(숫자를 하드코딩하지만 "데이터에 따라 자동 변화" = adaptive)
+        # - 최소/최대만 정해두면 사용자 입장에서는 "자동"으로 느껴집니다.
+        base = 22
+        fontSizeByLeaf = max(12, min(base, int(28 - leaf_count * 0.6)))
 
         fig = px.treemap(
             df_w,
@@ -559,8 +587,30 @@ def render_portfolio_treemap(
             color="asset_type",
             # ✅ 여러 색을 제공하는 팔레트(원하는 것으로 바꿔도 됨)
             color_discrete_sequence=px.colors.qualitative.Set3,
+            # ✅ Plotly가 자동으로 보여주는 필드명을 한글로 바꿉니다.
+            labels=LABELS,
+            # ✅ hover에 보여줄 값을 명시적으로 통제할 수 있습니다.
+            hover_data={
+                "valuation_amount": ":,.0f",
+                "market": True,
+                "asset_type": True,
+                "name_kr": True,
+            }
         )
         fig.update_layout(height=550)
+        fig.update_layout(margin=dict(t=20, l=10, r=10, b=10))
+
+        # ✅ hovertemplate을 완전히 덮어써서 Plotly 기본 필드(labels/parent/id)를 표시하지 않게 함
+        # - <extra></extra>를 넣으면 오른쪽 회색 박스도 제거됩니다.
+        fig.update_traces(
+            hovertemplate="<b>%{label}</b><br>평가금액=%{value:,.0f}<extra></extra>"
+        )
+        # ✅ 전체 폰트(타이틀/범례 등) 기본 크기
+        # fig.update_layout(font=dict(size=16))
+
+        # ✅ 트리맵 라벨 텍스트 크기(블록 내부)
+        fig.update_traces(textfont_size=fontSizeByLeaf)
+
         st.plotly_chart(fig, width='stretch')
         st.caption("※ 마지막 스냅샷 날짜 기준 평가금액 Treemap")
 
@@ -587,6 +637,14 @@ def render_portfolio_treemap(
         latest["abs_cum"] = latest["cum_contribution"].abs()
         latest["cum_pct"] = latest["cum_contribution"] * 100
 
+        leaf_count = int(latest["asset_id"].nunique())  # ✅ 말단 개수 근사
+
+        # ✅ 말단이 적으면 더 크게, 많으면 덜 크게(숫자를 하드코딩하지만 "데이터에 따라 자동 변화" = adaptive)
+        # - 최소/최대만 정해두면 사용자 입장에서는 "자동"으로 느껴집니다.
+        base = 22
+        fontSizeByLeaf = max(12, min(base, int(28 - leaf_count * 0.6)))
+
+
         fig = px.treemap(
             latest,
             path=["market", "asset_type", "name_kr"],
@@ -594,8 +652,22 @@ def render_portfolio_treemap(
             color="cum_pct",
             # ✅ 성과 방향(+) / (-)이 색으로 명확하게 보이는 컬러맵
             color_continuous_scale=px.colors.diverging.RdYlGn,
+            labels=LABELS,
         )
         fig.update_layout(height=550)
+        fig.update_layout(margin=dict(t=20, l=10, r=10, b=10))
+
+        # ✅ 타일 간 여백 축소
+        # fig.update_traces(tiling=dict(pad=2))  
+
+        # 추가로, legend가 세로 공간을 잡아먹는다면(특히 범주형 color):
+        # fig.update_layout(showlegend=False)  # 필요하면 켬/끔
+
+        fig.update_traces(
+            hovertemplate="<b>%{label}</b><br>누적기여도=%{value:,.0f}<extra></extra>"
+        )
+        # ✅ 트리맵 라벨 텍스트 크기(블록 내부)
+        fig.update_traces(textfont_size=fontSizeByLeaf)
         st.plotly_chart(fig, width='stretch')
         st.caption("※ 기간 누적 기여도 Treemap (면적=절대값, 색=방향/크기)")
 
@@ -694,12 +766,19 @@ def render_asset_contribution_section_full(
 
     top_assets = set(latest.head(max_assets)["asset_id"].tolist())
     df_plot = df[df["asset_id"].isin(top_assets)].copy()
+    # df_plot["date"] = pd.to_datetime(df_plot["date"]).dt.strftime("%Y-%m-%d")
+    df_plot["date"] = pd.to_datetime(df_plot["date"])  # ✅ datetime 유지
 
     chart = (
         alt.Chart(df_plot)
         .mark_area()
         .encode(
-            x=alt.X("date:T", title="Date"),
+            # 2번 방법: axis format을 날짜만 나오도록 강제
+            x=alt.X("date:T", title="Date", axis=alt.Axis(format="%Y-%m-%d")),
+            # 문자열 날짜는 O(Ordinal)로 처리 → 시간(12 PM) 표시가 사라짐
+            # 날짜를 “시간 데이터”가 아니라 “범주(ordered)”로 처리(단점: 기간이 길면 틱이 너무 많아질 수 있습니다.)
+            # x=alt.X("date:O", title="Date"),
+            # x=alt.X("date:T", title="Date"),
             y=alt.Y("cum_contribution_pct:Q", stack="zero", title="누적 기여도(%)"),
             color=alt.Color("name_kr:N", title="자산"),
             tooltip=[
@@ -777,19 +856,51 @@ def render_transactions_table_section(account_id: str, start_date: str, end_date
     # ✅ id 컬럼 숨기기(transactions의 PK를 화면에 굳이 보여줄 필요가 없으면 drop)
     df = df.drop(columns=["id"], errors="ignore")
 
-    # (선택) 보기 좋게 컬럼 순서 재정렬
-    preferred_cols = [
-        "transaction_date", "trade_type", "ticker", "name_kr",
-        "quantity", "price", "fee", "tax", "asset_currency",
-        "account_name", "memo"
-    ]    
-    cols = [c for c in preferred_cols if c in df.columns] + [c for c in df.columns if c not in preferred_cols]
-    df = df[cols]
+    # =========================
+    # ✅ 컬럼명을 한글로 표시하기 위한 맵핑 테이블
+    # - 실제 df에 존재하는 컬럼만 rename됩니다.
+    # =========================
+    COL_KR = {
+        "transaction_date": "거래일",
+        "trade_type": "거래구분",
+        "ticker": "티커",
+        "name_kr": "종목명",
+        "asset_currency": "통화",
+        "quantity": "수량/금액",
+        "price": "단가",
+        "fee": "수수료",
+        "tax": "세금",
+        "memo": "메모",
+        "account_name": "계좌",
+    }
+    TRADE_TYPE_KR = {
+        "BUY": "매수",
+        "SELL": "매도",
+        "DEPOSIT": "입금",
+        "WITHDRAW": "출금",
+    }
+
+    df["trade_type"] = df["trade_type"].map(TRADE_TYPE_KR).fillna(df["trade_type"])
+    df["transaction_date"] = pd.to_datetime(df["transaction_date"]).dt.date
+    df["asset_currency"] = df["assets"].apply(lambda x: (x or {}).get("currency"))
+
+    # ✅ 표시는 한글이지만, 내부 로직/코드는 영문 컬럼을 계속 써도 됩니다.
+    df_display = df.rename(columns=COL_KR)
+
+    # (선택) 표시 컬럼 순서를 한글 기준으로 정렬하고 싶으면:
+    display_order = [
+        "거래일", "거래구분", "티커", "종목명", "통화",
+        "수량/금액", "단가", "수수료", "세금", "계좌", "메모"
+    ]
+
+    cols = [c for c in display_order if c in df_display.columns] + [c for c in df_display.columns if c not in display_order]
+    df_display = df_display[cols]
 
     # join된 dict 펼치기(간단)
-    df["ticker"] = df["assets"].apply(lambda x: (x or {}).get("ticker"))
-    df["name_kr"] = df["assets"].apply(lambda x: (x or {}).get("name_kr"))
-    df["asset_currency"] = df["assets"].apply(lambda x: (x or {}).get("currency"))
-    df = df.drop(columns=["assets"], errors="ignore")
+    # df["ticker"] = df["assets"].apply(lambda x: (x or {}).get("ticker"))
+    # df["name_kr"] = df["assets"].apply(lambda x: (x or {}).get("name_kr"))
+    # df["asset_currency"] = df["assets"].apply(lambda x: (x or {}).get("currency"))
+    # df = df.drop(columns=["assets"], errors="ignore")
 
-    st.dataframe(df, width='stretch')
+    # st.dataframe(df, width='stretch')
+    st.dataframe(df_display, width='stretch')

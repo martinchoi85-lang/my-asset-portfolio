@@ -183,20 +183,101 @@ class TransactionService:
 
         return inserted
 
+
     @staticmethod
-    def create_transaction_and_rebuild(req: CreateTransactionRequest) -> Dict[str, Any]:
+    def _get_asset_currency(asset_id: int) -> str:
+        """✅ 원자산의 통화를 조회하여, 어떤 CASH 자산을 움직여야 하는지 결정합니다."""
+        supabase = get_supabase_client()
+        row = (
+            supabase.table("assets")
+            .select("currency")
+            .eq("id", asset_id)
+            .single()
+            .execute()
+            .data
+        )
+        if not row or not row.get("currency"):
+            raise ValueError(f"assets.id={asset_id} currency not found")
+        return row["currency"]
+
+
+    @staticmethod
+    def _get_cash_asset_id_by_currency(currency: str) -> int:
         """
-        UI에서 호출할 단일 진입점.
-        1) 거래 insert
-        2) 해당 자산에 대해 tx_date~today 리빌드
+        ✅ 통화에 맞는 CASH 자산을 찾습니다.
+        - 정책: assets.asset_type='cash' AND assets.currency=통화
+        - CASH_KRW/CASH_USD를 수동으로 추가하셨으므로 여기서 자동 매칭됩니다.
         """
+        supabase = get_supabase_client()
+        rows = (
+            supabase.table("assets")
+            .select("id")
+            .eq("asset_type", "cash")
+            .eq("currency", currency)
+            .execute()
+            .data or []
+        )
+        if not rows:
+            raise ValueError(f"cash asset not found for currency={currency}. assets.asset_type='cash' 확인")
+        return int(rows[0]["id"])
+
+
+    @staticmethod
+    def create_transaction_and_rebuild(req: CreateTransactionRequest, *, auto_cash: bool = True) -> Dict[str, Any]:
+        """
+        ✅ 거래 입력 단일 진입점(확장)
+        1) 원자산 거래 insert
+        2) BUY/SELL이면 cash mirror 거래 자동 insert
+        3) 원자산 + cash 자산 스냅샷 리빌드
+
+        ⚠️ 원자성 주의:
+        - 기존에 사용자가 cash를 수동 입력해둔 데이터가 있으면,
+          auto_cash=True 상태에서 BUY/SELL을 입력할 때 현금이 이중 반영될 수 있습니다.
+        - 그래서 UI 체크박스로 on/off를 제공하는 것이 안전합니다.
+        """
+        # 1) 원자산 거래 insert
         tx_row = TransactionService.create_transaction(req)
 
+        cash_tx_row = None
+        cash_asset_id = None
+
+        # ✅ auto_cash 옵션이 켜져 있고, BUY/SELL인 경우에만 현금 자동 반영
+        if auto_cash and req.trade_type in {"BUY", "SELL"}:
+            asset_ccy = TransactionService._get_asset_currency(req.asset_id)
+            cash_asset_id = TransactionService._get_cash_asset_id_by_currency(asset_ccy)
+
+            # ✅ 현금 변동액 산정: 매수=출금(매수대금+비용), 매도=입금(매도대금-비용)
+            gross = req.quantity * req.price
+            fees = (req.fee or 0.0) + (req.tax or 0.0)
+
+            if req.trade_type == "BUY":
+                cash_trade_type = "WITHDRAW"
+                cash_amount = gross + fees
+            else:
+                cash_trade_type = "DEPOSIT"
+                cash_amount = max(0.0, gross - fees)  # ✅ 음수 방어
+
+            cash_req = CreateTransactionRequest(
+                account_id=req.account_id,
+                asset_id=cash_asset_id,
+                transaction_date=req.transaction_date,
+                trade_type=cash_trade_type,
+                quantity=float(cash_amount),  # ✅ cash는 quantity=잔고금액 모델
+                price=1.0,                    # ✅ cash 단가 1 고정
+                fee=0.0,
+                tax=0.0,
+                memo=f"[AUTO] {req.trade_type} cash mirror (gross={gross}, fees={fees})",
+            )
+
+            # ✅ cash 거래 insert
+            cash_tx_row = TransactionService.create_transaction(cash_req)
+
+        # 2) 리빌드 범위: 거래일~오늘
         start = req.transaction_date
         end = date.today()
 
-        # 리빌드: 해당 asset만 (V1 최소)
-        rebuilt_rows = TransactionService.rebuild_daily_snapshots_for_asset(
+        # ✅ 원자산 리빌드
+        rebuilt_main = TransactionService.rebuild_daily_snapshots_for_asset(
             account_id=req.account_id,
             asset_id=req.asset_id,
             start_date=start,
@@ -204,9 +285,23 @@ class TransactionService:
             delete_first=True,
         )
 
+        # ✅ cash 거래가 생성된 경우에만 cash 자산도 리빌드
+        rebuilt_cash = 0
+        if cash_asset_id is not None:
+            rebuilt_cash = TransactionService.rebuild_daily_snapshots_for_asset(
+                account_id=req.account_id,
+                asset_id=cash_asset_id,
+                start_date=start,
+                end_date=end,
+                delete_first=True,
+            )
+
         return {
             "transaction": tx_row,
-            "rebuilt_rows": rebuilt_rows,
+            "cash_transaction": cash_tx_row,
+            "auto_cash": auto_cash,
+            "rebuilt_rows_main": rebuilt_main,
+            "rebuilt_rows_cash": rebuilt_cash,
             "rebuilt_start_date": start.isoformat(),
             "rebuilt_end_date": end.isoformat(),
         }

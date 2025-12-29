@@ -1,14 +1,5 @@
 # src/asset_portfolio/dashboard/app.py
-
 import streamlit as st
-# import pandas as pd
-# from asset_portfolio.backend.infra.supabase_client import get_supabase_client
-# from asset_portfolio.backend.services.portfolio_aggregator import (
-#     calculate_portfolio_return_series
-# )
-# from asset_portfolio.backend.services.portfolio_calculator import (
-#     calculate_asset_return_series_from_snapshots
-# )
 from asset_portfolio.dashboard.render import (
     render_asset_return_section, 
     render_portfolio_return_section, 
@@ -21,7 +12,7 @@ from asset_portfolio.dashboard.render import (
     render_transactions_table_section
 )
 from asset_portfolio.dashboard.transaction_editor import render_transaction_editor
-
+from asset_portfolio.dashboard.price_updater import render_price_updater
 
 st.set_page_config(
     page_title="Asset Portfolio Dashboard",
@@ -31,12 +22,17 @@ st.set_page_config(
 # ✅ 페이지 전환(요구사항 4)
 page = st.sidebar.radio(
     "화면 선택",
-    ["Main Dashboard", "Transaction Editor"],
+    ["Main Dashboard", "Transaction Editor", "Price Updater"],
     index=0,
 )
 
 if page == "Transaction Editor":
     render_transaction_editor()
+    st.stop()
+
+
+if page == "Price Updater":
+    render_price_updater()
     st.stop()
 
 
@@ -56,10 +52,15 @@ tab1, tab2 = st.tabs(["Dashboard", "Transactions"])
 
 with tab1:
     render_portfolio_return_section(account_id, start_date, end_date)
+    st.divider()
     render_asset_return_section(account_id, start_date, end_date)
+    st.divider()
     render_asset_contribution_section_full(account_id, start_date, end_date)
+    st.divider()
     render_asset_weight_section(account_id, start_date, end_date)
+    st.divider()
     render_asset_contribution_stacked_area(account_id, start_date, end_date)
+    st.divider()
     render_portfolio_treemap(account_id, start_date, end_date)
 
 with tab2:
