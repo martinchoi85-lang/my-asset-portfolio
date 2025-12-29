@@ -586,7 +586,9 @@ def render_portfolio_treemap(
             # ✅ 자산유형별로 색을 다르게 주면 시각적으로 훨씬 구분이 잘 됩니다.
             color="asset_type",
             # ✅ 여러 색을 제공하는 팔레트(원하는 것으로 바꿔도 됨)
-            color_discrete_sequence=px.colors.qualitative.Set3,
+            # color_discrete_sequence=px.colors.qualitative.Set3,  # 최초 팔레트
+            # color_discrete_sequence=px.colors.qualitative.Alphabet,  # 색 종류 많은 팔레트
+            color_discrete_sequence=px.colors.diverging.RdYlGn,   # 값에 따른 그레디언트 팔레트
             # ✅ Plotly가 자동으로 보여주는 필드명을 한글로 바꿉니다.
             labels=LABELS,
             # ✅ hover에 보여줄 값을 명시적으로 통제할 수 있습니다.

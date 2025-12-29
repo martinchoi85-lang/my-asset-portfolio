@@ -13,16 +13,17 @@ from asset_portfolio.dashboard.render import (
 )
 from asset_portfolio.dashboard.transaction_editor import render_transaction_editor
 from asset_portfolio.dashboard.price_updater import render_price_updater
+from asset_portfolio.dashboard.asset_editor import render_asset_editor
 
 st.set_page_config(
     page_title="Asset Portfolio Dashboard",
     layout="wide"
 )
 
-# ✅ 페이지 전환(요구사항 4)
+# 페이지 전환
 page = st.sidebar.radio(
     "화면 선택",
-    ["Main Dashboard", "Transaction Editor", "Price Updater"],
+    ["Main Dashboard", "Transaction Editor", "Price Updater", "Asset Editor"],
     index=0,
 )
 
@@ -35,6 +36,10 @@ if page == "Price Updater":
     render_price_updater()
     st.stop()
 
+
+if page == "Asset Editor":
+    render_asset_editor()
+    st.stop()
 
 # =========================
 # Main Dashboard 기존 로직

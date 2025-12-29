@@ -22,7 +22,7 @@ if __name__ == "__main__":
     for ACCOUNT_ID in accunt_ids:
         generate_daily_snapshots(
             account_id=ACCOUNT_ID,
-            start_date=date(2025, 12, 27),   # 거래 시작일 기준
-            end_date=date(2025, 12, 27),   # 거래 시작일 기준
+            start_date=date(2025, 12, 26),   # 거래 시작일 기준
+            end_date=date(2025, 12, 29),   # 거래 시작일 기준
             # end_date=date.today(),
         )
