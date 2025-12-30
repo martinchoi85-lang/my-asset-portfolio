@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import yfinance as yf
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
 from asset_portfolio.backend.services.transaction_service import TransactionService
@@ -10,10 +10,14 @@ from asset_portfolio.backend.services.transaction_service import TransactionServ
 
 @dataclass
 class PriceUpdateResult:
+    """
+    ✅ 가격 업데이트 결과를 UI에 그대로 표시하기 위한 데이터 구조
+    """
     asset_id: int
     ticker: str
     ok: bool
-    price: Optional[float] = None
+    old_price: Optional[float] = None
+    new_price: Optional[float] = None
     reason: Optional[str] = None
 
 
@@ -21,6 +25,7 @@ class PriceUpdaterService:
     """
     ✅ 목적:
     - assets 테이블의 current_price를 yfinance로 업데이트
+    - (선택) 업데이트 성공한 자산들에 대해 스냅샷 자동 리빌드까지 연결
     - ticker가 있어도 업데이트 실패하는 케이스가 많으므로, 실패 사유를 함께 반환하여 UI에서 확인 가능
 
     ✅ 방어전략:
@@ -30,6 +35,54 @@ class PriceUpdaterService:
     - 한국 종목처럼 ticker 포맷이 다를 수 있으므로 market 기반으로 후보 ticker를 생성해서 시도
     """
 
+    @staticmethod
+    def _normalize_ticker_for_yf(ticker: str, market: Optional[str]) -> str:
+        """
+        ✅ yfinance가 요구하는 티커 형식으로 정규화
+        - 한국 종목은 보통 '005930.KS' 또는 '005930.KQ' 형태가 필요합니다.
+        - 이미 '.'이 포함된 경우(예: SPY, AAPL)는 그대로 둡니다.
+
+        ⚠️ 이 규칙은 100% 자동화가 어려워서,
+           V1에서는 시장(market) 기반의 단순 규칙을 적용합니다.
+        """
+        t = (ticker or "").strip()
+        if not t:
+            return t
+
+        # 이미 suffix가 있거나 미국 티커처럼 보이면 그대로
+        if "." in t:
+            return t
+
+        m = (market or "").lower().strip()
+        if m in {"korea", "kr", "kor"}:
+            # ✅ 한국 상장(단순): KS로 가정
+            # - 코스닥(KQ)까지 자동 판별하려면 별도 매핑 테이블이 필요
+            return f"{t}.KS"
+        return t  # ✅ 기본: 미국/기타는 그대로
+    
+    
+    @staticmethod
+    def _fetch_last_close_price(yf_ticker: str) -> float:
+        """
+        ✅ yfinance로 최근 종가(또는 마지막 close)를 가져옵니다.
+        - 데이터가 비어있거나 NaN이면 예외 처리합니다.
+        """
+        if not yf_ticker:
+            raise ValueError("empty ticker")
+
+        tk = yf.Ticker(yf_ticker)
+
+        # ✅ 가장 단순/안전: 최근 5일 hist에서 마지막 close 사용
+        hist = tk.history(period="5d")
+        if hist is None or hist.empty:
+            raise ValueError("no price data (empty history)")
+
+        last_close = float(hist["Close"].dropna().iloc[-1])
+        if last_close <= 0:
+            raise ValueError("invalid close price")
+        return last_close
+    
+    
     @staticmethod
     def _safe_float(v) -> Optional[float]:
         try:
@@ -104,54 +157,89 @@ class PriceUpdaterService:
 
     @staticmethod
     def update_asset_price(asset_id: int) -> PriceUpdateResult:
+        """
+        ✅ 단일 자산 current_price 업데이트 + 메타데이터 기록
+        - 성공: current_price, price_updated_at, status=ok, error=NULL, source=yfinance
+        - 실패: (current_price 유지) status=failed, error 저장, source=yfinance
+        """
         supabase = get_supabase_client()
 
-        # ✅ 자산 메타(티커/시장) 조회
         row = (
             supabase.table("assets")
-            .select("id, ticker, market, asset_type")
+            .select("id, ticker, market, current_price")
             .eq("id", asset_id)
             .single()
             .execute()
             .data
         )
         if not row:
-            return PriceUpdateResult(asset_id=asset_id, ticker="", ok=False, reason="assets에서 자산을 찾지 못함")
+            return PriceUpdateResult(asset_id=asset_id, ticker="", ok=False, reason="asset not found")
 
-        ticker = (row.get("ticker") or "").strip()
+        ticker = str(row.get("ticker") or "")
         market = row.get("market")
-        asset_type = (row.get("asset_type") or "").lower()
+        old_price = float(row.get("current_price") or 0.0)
 
-        # ✅ 현금은 현재가 업데이트 대상이 아닙니다(1로 고정)
-        if asset_type == "cash":
-            # 필요하면 current_price를 1로 정리만 해줘도 됨
-            supabase.table("assets").update({"current_price": 1}).eq("id", asset_id).execute()
-            return PriceUpdateResult(asset_id=asset_id, ticker=ticker, ok=True, price=1.0, reason="cash는 1 고정")
-
-        if not ticker:
-            return PriceUpdateResult(asset_id=asset_id, ticker="", ok=False, reason="ticker가 없음")
-
+        # ✅ 한국 종목 정확도 개선: 후보(.KS/.KQ) + fast_info/history fallback을 쓰는 함수 활용
         price, used_ticker, reason = PriceUpdaterService.fetch_price_from_yfinance(ticker, market)
-        if price is None:
-            return PriceUpdateResult(asset_id=asset_id, ticker=ticker, ok=False, reason=reason or "가격 조회 실패")
 
-        # ✅ DB 업데이트
-        supabase.table("assets").update({"current_price": price}).eq("id", asset_id).execute()
-        return PriceUpdateResult(asset_id=asset_id, ticker=ticker, ok=True, price=price, reason=f"used_ticker={used_ticker}")
+        now = datetime.now(timezone.utc)
 
+        if price is None or float(price) <= 0:
+            # ✅ 실패: 기존 current_price는 유지하고, 메타만 기록
+            supabase.table("assets").update({
+                "price_updated_at": now.isoformat(),
+                "price_update_status": "failed",
+                "price_update_error": (str(reason)[:300] if reason else "unknown error"),
+                "price_source": "yfinance",
+            }).eq("id", asset_id).execute()
+
+            return PriceUpdateResult(
+                asset_id=asset_id,
+                ticker=ticker,
+                ok=False,
+                old_price=old_price,
+                new_price=None,
+                reason=f"{reason} (used={used_ticker})" if used_ticker else str(reason),
+            )
+
+        new_price = float(price)
+
+        # ✅ 성공: current_price + 메타 기록
+        supabase.table("assets").update({
+            "current_price": new_price,
+            "price_updated_at": now.isoformat(),
+            "price_update_status": "ok",
+            "price_update_error": None,
+            "price_source": "yfinance",
+        }).eq("id", asset_id).execute()
+
+        return PriceUpdateResult(
+            asset_id=asset_id,
+            ticker=ticker,
+            ok=True,
+            old_price=old_price,
+            new_price=new_price,
+            reason=f"used={used_ticker}" if used_ticker else None,
+        )
+                
+            
     @staticmethod
     def update_many(asset_ids: List[int]) -> List[PriceUpdateResult]:
-        results = []
+        """
+        ✅ 여러 자산 가격 업데이트
+        """
+        results: List[PriceUpdateResult] = []
         for aid in asset_ids:
-            results.append(PriceUpdaterService.update_asset_price(aid))
+            results.append(PriceUpdaterService.update_asset_price(int(aid)))
         return results
 
 
+    # (핵심) 업데이트 후 스냅샷 자동 리빌드 연결
     @staticmethod
     def _get_accounts_holding_asset(asset_id: int) -> List[str]:
         """
-        ✅ 해당 자산이 거래된 계좌 목록을 조회
-        - transactions에서 asset_id로 필터 후 account_id를 중복 제거
+        ✅ 해당 자산이 거래된 계좌 목록을 조회합니다.
+        - transactions에서 asset_id로 필터 후 account_id distinct
         """
         supabase = get_supabase_client()
         rows = (
@@ -184,7 +272,6 @@ class PriceUpdaterService:
         if not rows:
             return date.today()
 
-        # ✅ timestamp string에서 YYYY-MM-DD만 떼어 date로 변환
         s = str(rows[0]["transaction_date"])
         return date.fromisoformat(s[:10])
 

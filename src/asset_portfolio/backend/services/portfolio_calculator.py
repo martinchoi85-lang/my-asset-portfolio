@@ -466,29 +466,36 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
                 pass
 
             tx_idx += 1
-
+            
+        # =========================
+        # 평균매입단가(purchase_price) 계산
+        # =========================
+        # ✅ 보유수량이 0이면 평균단가를 0으로 둡니다.
+        purchase_price = 0.0
+        if current_qty > 0:
+            purchase_price = total_purchase_amount / current_qty
+            
         # -------------------------
         # (B) 평가단가(valuation_price) 결정
         # -------------------------
         if is_cash:
-            # ✅ cash: 단가 1 고정
+            # ✅ CASH는 단가 1 고정 (잔고를 quantity로 들고 가므로)
             valuation_price = 1.0
         else:
-            # ✅ 비현금: current_price 사용 (V1.1)
-            # - current_price가 0이면 “가격 업데이트가 안 된 상태”이므로,
-            #   임시로 평균매입단가를 fallback으로 사용하면 대시보드가 덜 비게 됩니다.
-            if current_price and current_price > 0:
-                valuation_price = current_price
+            # ✅ 비현금 자산: current_price를 우선 사용
+            # ✅ 중요: 업데이트 실패로 current_price가 0/None이면,
+            #          valuation_price가 0이 되어 차트에서 자산이 빠질 수 있으므로 fallback 필요
+            if current_price is not None and float(current_price) > 0:
+                valuation_price = float(current_price)
             else:
-                # ✅ 방어: 가격이 없을 때는 평균매입단가로 임시 대체
-                # valuation_price = purchase_price
-                valuation_price = (total_purchase_amount / current_qty) if current_qty > 0 else 0.0
+                # ✅ fallback: 평균매입단가로 평가(최소한 0이 되지 않게)
+                valuation_price = float(purchase_price)
         
         # -------------------------
         # (C) 금액/단가 계산
         # -------------------------
-        valuation_amount = current_qty * valuation_price
-        purchase_price = (total_purchase_amount / current_qty) if current_qty > 0 else 0.0
+        valuation_amount = float(current_qty) * float(valuation_price)
+        urchase_amount = float(total_purchase_amount)
 
         # ✅ 요구사항: quantity=0이어도 row를 유지 (차트에서는 0이 사실상 보이지 않도록 필터링 가능)
         snapshots.append({

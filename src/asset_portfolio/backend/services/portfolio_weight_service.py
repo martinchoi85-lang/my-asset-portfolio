@@ -1,8 +1,7 @@
 from __future__ import annotations
 import pandas as pd
 from typing import Dict, List, Optional
-# from asset_portfolio.backend.infra.supabase_client import get_supabase_client
-from asset_portfolio.dashboard.data import build_daily_snapshots_query
+from asset_portfolio.backend.infra.query import build_daily_snapshots_query
 
 
 def load_asset_weight_timeseries(

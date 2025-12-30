@@ -1,8 +1,7 @@
 # src/asset_portfolio/backend/services/portfolio_service.py
 import pandas as pd
 from typing import List, Dict
-from asset_portfolio.backend.infra.supabase_client import get_supabase_client
-from asset_portfolio.dashboard.data import build_daily_snapshots_query
+from asset_portfolio.backend.infra.query import build_daily_snapshots_query
 from asset_portfolio.backend.services.portfolio_calculator import (
     calculate_asset_return_series_from_snapshots, calculate_portfolio_return_series_from_snapshots,
 )
@@ -160,22 +159,3 @@ def calculate_asset_contributions(
             "contribution_pct",
         ]
     ]
-
-
-def load_asset_contribution_data(
-    account_id: str,
-    start_date: str,
-    end_date: str,
-):
-    supabase = get_supabase_client()
-
-    response = (
-        supabase.table("daily_snapshots")
-        .select("date, asset_id, valuation_amount")
-        .eq("account_id", account_id)
-        .gte("date", start_date)
-        .lte("date", end_date)
-        .execute()
-    )
-
-    return response.data or []

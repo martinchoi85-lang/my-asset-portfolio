@@ -12,8 +12,8 @@ from asset_portfolio.dashboard.render import (
     render_transactions_table_section
 )
 from asset_portfolio.dashboard.transaction_editor import render_transaction_editor
-from asset_portfolio.dashboard.price_updater import render_price_updater
 from asset_portfolio.dashboard.asset_editor import render_asset_editor
+from asset_portfolio.dashboard.price_updater import render_price_updater
 
 st.set_page_config(
     page_title="Asset Portfolio Dashboard",

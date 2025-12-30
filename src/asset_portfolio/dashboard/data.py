@@ -1,26 +1,17 @@
 import pandas as pd
 import streamlit as st
-from typing import Optional
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
-
-ALL_ACCOUNT_TOKEN = "__ALL__"
+from asset_portfolio.backend.infra.query import build_daily_snapshots_query
 
 
 def load_asset_contribution_data(account_id: str, start_date: str, end_date: str):
-    supabase = get_supabase_client()
-    q = (
-        supabase.table("daily_snapshots")
-        .select("date, asset_id, valuation_amount")
-        .gte("date", start_date)
-        .lte("date", end_date)
+    query = build_daily_snapshots_query(
+        select_cols="date, asset_id, valuation_amount",
+        start_date=start_date,
+        end_date=end_date,
+        account_id=account_id,
     )
-
-    # ✅ ALL이 아닌 경우에만 계좌 필터 적용
-    if account_id and account_id != "__ALL__":
-        q = q.eq("account_id", account_id)
-
-    response = q.execute()
-
+    response = query.order("date").execute()
     return response.data or []
 
 
@@ -45,33 +36,4 @@ def load_assets_lookup() -> pd.DataFrame:
     return df
 
 
-def build_daily_snapshots_query(
-    select_cols: str,
-    start_date: str,
-    end_date: str,
-    account_id: Optional[str] = None,
-):
-    """
-    daily_snapshots 공통 쿼리 빌더
-    - account_id가 "__ALL__"이면 account 필터를 걸지 않는다.
-    - execute()는 여기서 하지 않는다(호출자가 마지막에 execute)
-    """
-    supabase = get_supabase_client()
 
-    q = (
-        supabase.table("daily_snapshots")
-        .select(select_cols)
-        .order("date")
-    )
-
-    # ✅ start_date, end_date, account_id가 있을 때만 필터 적용 (None-safe)
-    if start_date is not None:
-        q = q.gte("date", start_date)
-
-    if end_date is not None:
-        q = q.lte("date", end_date)
-
-    if account_id and account_id != ALL_ACCOUNT_TOKEN:
-        q = q.eq("account_id", account_id)
-
-    return q

@@ -11,22 +11,21 @@ from asset_portfolio.backend.services.portfolio_weight_service import (
 )
 from asset_portfolio.backend.services.portfolio_service import (
     get_portfolio_return_series,
-    load_asset_contribution_data, 
+    # load_asset_contribution_data, 
     calculate_asset_contributions
 )
 from asset_portfolio.backend.services.benchmark_service import (
-    load_cash_benchmark_series,
-    merge_portfolio_and_benchmark, 
-    merge_portfolio_and_benchmark_ffill,
+    # load_cash_benchmark_series,
+    # merge_portfolio_and_benchmark, 
+    # merge_portfolio_and_benchmark_ffill,
     load_sp500_benchmark_series,
     align_portfolio_to_benchmark_calendar
 )
-from asset_portfolio.dashboard.data import (
-    load_asset_contribution_data,
-    load_assets_lookup,
-    build_daily_snapshots_query
+from asset_portfolio.dashboard.data import load_assets_lookup
+from asset_portfolio.backend.infra.query import (
+    build_daily_snapshots_query,
+    load_asset_contribution_data
 )
-
 
 def render_portfolio_return_section(account_id: str, start_date: str, end_date: str):
     st.subheader("📈 Portfolio 전체 수익률")
@@ -829,14 +828,20 @@ def render_transactions_table_section(account_id: str, start_date: str, end_date
             assets ( ticker, name_kr, currency ),
             accounts ( name, brokerage, owner, type )
         """)
-        .gte("transaction_date", f"{start_date}T00:00:00")
-        .lte("transaction_date", f"{end_date}T23:59:59")
+        # .gte("transaction_date", f"{start_date}T00:00:00")
+        # .lte("transaction_date", f"{end_date}T23:59:59")
         .order("transaction_date", desc=True)
     )
 
     # ✅ ALL이 아닌 경우에만 계좌 필터 적용
     if account_id and account_id != "__ALL__":
         query = query.eq("account_id", account_id)
+
+    if start_date is not None:
+        query = query.gte("transaction_date", start_date)
+
+    if end_date is not None:
+        query = query.lte("transaction_date", end_date)
 
     response = query.execute()
     rows = response.data or []

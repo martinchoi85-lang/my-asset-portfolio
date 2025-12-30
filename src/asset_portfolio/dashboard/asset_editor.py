@@ -37,7 +37,7 @@ def render_asset_editor():
 
     current_price = st.number_input("현재가(current_price)", min_value=0.0, value=float(row.get("current_price") or 0.0))
 
-    lookthrough_available = st.checkbox("룩스루(ETF/TDF/Fund의 내부 구성 자산을 분해해서 보는 기능) 가능", value=bool(row.get("lookthrough_available") or False))
+    lookthrough_available = st.checkbox("룩스루 가능(ETF/TDF/Fund의 내부 구성 자산을 분해해서 보는 기능)", value=bool(row.get("lookthrough_available") or False))
 
     st.divider()
     col1, col2 = st.columns([1, 1])

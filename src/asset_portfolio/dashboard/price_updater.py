@@ -1,23 +1,10 @@
 import streamlit as st
 import pandas as pd
 
-from asset_portfolio.backend.infra.supabase_client import get_supabase_client
+from asset_portfolio.dashboard.transaction_editor import _load_assets_df
 from asset_portfolio.backend.services.price_updater_service import PriceUpdaterService
 
-
-@st.cache_data(ttl=3600)
-def _load_assets_df() -> pd.DataFrame:
-    supabase = get_supabase_client()
-    rows = (
-        supabase.table("assets")
-        .select("id, ticker, name_kr, asset_type, market, currency, current_price")
-        .order("ticker")
-        .execute()
-        .data or []
-    )
-    return pd.DataFrame(rows)
-
-
+        
 def render_price_updater():
     st.title("💹 Price Updater (yfinance)")
 
@@ -26,12 +13,34 @@ def render_price_updater():
         st.error("assets 테이블에 데이터가 없습니다.")
         return
 
-    # ✅ 현금은 업데이트 대상이 아니므로 기본 제외(원하면 토글로 포함 가능)
-    show_cash = st.checkbox("현금(CASH)도 포함해서 보기", value=False)
+    # ✅ 필터 섹션: stale/failed 자산만 빠르게 골라내기
+    st.subheader("필터")
+    colA, colB, colC = st.columns([1, 1, 1])
+
+    with colA:
+        show_cash = st.checkbox("현금(CASH)도 포함해서 보기", value=False)
+    with colB:
+        only_failed = st.checkbox("실패 자산만 보기", value=False)
+    with colC:
+        only_stale = st.checkbox("스테일(오래된) 자산만 보기", value=False)
+
+    stale_days = st.number_input("스테일 기준(일)", min_value=1, value=3, step=1)
+
     if not show_cash:
         df = df[df["asset_type"].fillna("").str.lower() != "cash"]
 
-    st.caption("yfinance로 current_price를 갱신합니다. ticker가 있어도 종종 실패할 수 있으므로 실패 사유를 표로 제공합니다.")
+    # ✅ 스테일 판정: price_updated_at이 NULL이거나 N일보다 오래되면 stale
+    # - timezone이 섞일 수 있으니 UTC 기준으로 비교
+    now_utc = pd.Timestamp.utcnow()
+    df["price_updated_at"] = pd.to_datetime(df.get("price_updated_at"), errors="coerce", utc=True)
+    df["is_stale"] = df["price_updated_at"].isna() | ((now_utc - df["price_updated_at"]) > pd.Timedelta(days=int(stale_days)))
+
+    if only_failed:
+        df = df[df["price_update_status"].fillna("").str.lower() == "failed"]
+    if only_stale:
+        df = df[df["is_stale"] == True]
+
+    st.caption("yfinance로 current_price를 갱신합니다. 실패해도 기존가 유지 + 실패 사유/시각을 기록합니다.")
 
     mode = st.radio("업데이트 방식", ["선택한 자산만", "표에 보이는 전체"], index=0)
 
@@ -50,31 +59,23 @@ def render_price_updater():
         with st.spinner("가격 업데이트 중..."):
             results = PriceUpdaterService.update_many(selected_ids)
 
-        # ✅ 성공한 asset_id만 추출
-        ok_asset_ids = [r.asset_id for r in results if r.ok]
-
-        # ✅ 결과 표시 (기존)
-        # res_df = pd.DataFrame([r.__dict__ for r in results])
-        # st.dataframe(res_df, width='stretch')
-
-        # ✅ 선택: 업데이트 후 자동 리빌드
-        if auto_rebuild and ok_asset_ids:
-            with st.spinner("스냅샷 자동 리빌드 중..."):
-                summary = PriceUpdaterService.rebuild_snapshots_for_updated_assets(ok_asset_ids)
-
-            st.success(f"스냅샷 리빌드 완료: 총 {summary['rebuilt_total_rows']}행 업서트")
-
-        # ✅ 결과를 표로 보여줘서 “어떤 종목이 왜 실패했는지”를 즉시 확인 가능
-        res_df = pd.DataFrame([r.__dict__ for r in results])
-        res_df = res_df.rename(columns={
+        # ✅ 결과표: old_price/new_price 기준으로 표시(기존 'price' rename 버그 수정)
+        res_df = pd.DataFrame([r.__dict__ for r in results]).rename(columns={
             "asset_id": "자산ID",
             "ticker": "티커",
             "ok": "성공여부",
-            "price": "가격",
+            "old_price": "기존가",
+            "new_price": "신규가",
             "reason": "비고/실패사유",
         })
-        st.dataframe(res_df, width='stretch')
+        st.dataframe(res_df, width="stretch")
 
-        # ✅ 캐시 무효화: 업데이트된 current_price가 다른 화면에도 바로 반영되도록 처리
+        ok_asset_ids = [int(r.asset_id) for r in results if r.ok]
+
+        if auto_rebuild and ok_asset_ids:
+            with st.spinner("스냅샷 자동 리빌드 중..."):
+                summary = PriceUpdaterService.rebuild_snapshots_for_updated_assets(ok_asset_ids)
+            st.success(f"스냅샷 리빌드 완료: 총 {summary['rebuilt_total_rows']}행 (대상 {summary.get('rebuilt_pairs', '?')} 조합)")
+
         st.cache_data.clear()
-        st.success("완료되었습니다. (실패 종목은 사유를 확인하세요)")
+        st.success("완료되었습니다. (실패 종목은 사유/스테일 상태를 확인하세요)")

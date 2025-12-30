@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import date
 from typing import Optional
 
+from asset_portfolio.backend.infra.supabase_client import get_supabase_client
 from asset_portfolio.backend.services.transaction_service import TransactionService
 from asset_portfolio.backend.services.asset_service import AssetService  # ✅ 1) 신규 자산 생성
 from asset_portfolio.backend.services.transaction_service import CreateTransactionRequest  # 프로젝트에 맞게 조정
@@ -30,11 +31,13 @@ def _load_accounts_df() -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def _load_assets_df() -> pd.DataFrame:
-    from asset_portfolio.backend.infra.supabase_client import get_supabase_client
     supabase = get_supabase_client()
     rows = (
         supabase.table("assets")
-        .select("id, ticker, name_kr, asset_type, currency, market, underlying_asset_class")
+        .select(
+            "id, ticker, name_kr, asset_type, currency, market, underlying_asset_class, "
+            "current_price, price_updated_at, price_update_status, price_update_error, price_source"
+        )
         .order("market")
         .order("asset_type")
         .order("underlying_asset_class")
