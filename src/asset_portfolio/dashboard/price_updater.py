@@ -8,6 +8,10 @@ from asset_portfolio.backend.services.price_updater_service import PriceUpdaterS
 def render_price_updater():
     st.title("💹 Price Updater (yfinance)")
 
+    # ✅ 실행 중 플래그
+    if "price_busy" not in st.session_state:
+        st.session_state["price_busy"] = False
+
     df = _load_assets_df()
     if df.empty:
         st.error("assets 테이블에 데이터가 없습니다.")
@@ -55,27 +59,36 @@ def render_price_updater():
 
     auto_rebuild = st.checkbox("가격 업데이트 후 스냅샷 자동 리빌드", value=True)
 
-    if st.button("가격 업데이트 실행", type="primary", disabled=(len(selected_ids) == 0)):
-        with st.spinner("가격 업데이트 중..."):
-            results = PriceUpdaterService.update_many(selected_ids)
+    run_clicked = st.button("가격 업데이트 실행", type="primary", disabled=(len(selected_ids) == 0))
 
-        # ✅ 결과표: old_price/new_price 기준으로 표시(기존 'price' rename 버그 수정)
-        res_df = pd.DataFrame([r.__dict__ for r in results]).rename(columns={
-            "asset_id": "자산ID",
-            "ticker": "티커",
-            "ok": "성공여부",
-            "old_price": "기존가",
-            "new_price": "신규가",
-            "reason": "비고/실패사유",
-        })
-        st.dataframe(res_df, width="stretch")
+    if run_clicked:
+        st.session_state["price_busy"] = True
 
-        ok_asset_ids = [int(r.asset_id) for r in results if r.ok]
+        try:
+            with st.spinner("가격 업데이트 중..."):
+                results = PriceUpdaterService.update_many(selected_ids)
 
-        if auto_rebuild and ok_asset_ids:
-            with st.spinner("스냅샷 자동 리빌드 중..."):
-                summary = PriceUpdaterService.rebuild_snapshots_for_updated_assets(ok_asset_ids)
-            st.success(f"스냅샷 리빌드 완료: 총 {summary['rebuilt_total_rows']}행 (대상 {summary.get('rebuilt_pairs', '?')} 조합)")
+            # ✅ 결과표: old_price/new_price 기준으로 표시(기존 'price' rename 버그 수정)
+            res_df = pd.DataFrame([r.__dict__ for r in results]).rename(columns={
+                "asset_id": "자산ID",
+                "ticker": "티커",
+                "ok": "성공여부",
+                "old_price": "기존가",
+                "new_price": "신규가",
+                "reason": "비고/실패사유",
+            })
+            st.dataframe(res_df, width="stretch")
 
-        st.cache_data.clear()
-        st.success("완료되었습니다. (실패 종목은 사유/스테일 상태를 확인하세요)")
+            ok_asset_ids = [int(r.asset_id) for r in results if r.ok]
+
+            if auto_rebuild and ok_asset_ids:
+                with st.spinner("스냅샷 자동 리빌드 중..."):
+                    summary = PriceUpdaterService.rebuild_snapshots_for_updated_assets(ok_asset_ids)
+                st.success(f"스냅샷 리빌드 완료: 총 {summary['rebuilt_total_rows']}행 (대상 {summary.get('rebuilt_pairs', '?')} 조합)")
+
+            st.cache_data.clear()
+            st.success("완료되었습니다. (실패 종목은 사유/스테일 상태를 확인하세요)")
+        except Exception as e:
+            st.error(f"실행 실패: {e}")
+        finally:
+            st.session_state["price_busy"] = False

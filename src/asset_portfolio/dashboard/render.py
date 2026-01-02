@@ -613,7 +613,10 @@ def render_portfolio_treemap(
         fig.update_traces(textfont_size=fontSizeByLeaf)
 
         st.plotly_chart(fig, width='stretch')
-        st.caption("※ 마지막 스냅샷 날짜 기준 평가금액 Treemap")
+        st.caption("※ 마지막 스냅샷 날짜 기준 평가금액 Treemap")        
+
+        with st.expander("📄 데이터 원본"):
+            st.dataframe(df_w.sort_values(["date"], ascending=[True]))
 
     else:
         # 기간 누적 기여도

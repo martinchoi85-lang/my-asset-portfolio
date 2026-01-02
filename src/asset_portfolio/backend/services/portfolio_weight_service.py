@@ -107,7 +107,9 @@ def build_asset_weight_df(rows: List[Dict]) -> pd.DataFrame:
 
 def load_latest_asset_weights(account_id: str, start_date: str, end_date: str) -> pd.DataFrame:
     """
-    기간 내 마지막 날짜의 자산별 valuation_amount를 가져와 treemap용 weight로 사용
+    ✅ Treemap용 '현재 비중' 데이터
+    - 기존 버그: 전체 중 last_date 한 날짜만 잘라서 자산 누락 발생
+    - 개선: asset_id별로 end_date 이하 최신 스냅샷 1행을 선택
     """
     query = build_daily_snapshots_query(
         select_cols="date, asset_id, valuation_amount",
@@ -121,10 +123,12 @@ def load_latest_asset_weights(account_id: str, start_date: str, end_date: str) -
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
-    df["date"] = pd.to_datetime(df["date"])
-    df["valuation_amount"] = df["valuation_amount"].astype(float)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce").fillna(0.0)
 
-    last_date = df["date"].max()
-    df_last = df[df["date"] == last_date].copy()
+    # ✅ asset_id별 최신 스냅샷 1행만 남김
+    df = df.sort_values(["asset_id", "date"])
+    df_latest = df.groupby("asset_id", as_index=False).tail(1)
 
-    return df_last[["date", "asset_id", "valuation_amount"]]
+    return df_latest[["date", "asset_id", "valuation_amount"]]
+
