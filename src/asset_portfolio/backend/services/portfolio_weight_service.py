@@ -118,8 +118,8 @@ def _safe_float_series(s: pd.Series, col_name: str) -> pd.Series:
 
 def load_latest_asset_weights(account_id: str, start_date: str, end_date: str) -> pd.DataFrame:
     """
-    ✅ Treemap용 최신 비중 데이터 + USD 환산 포함
-    - (중요) valuation_amount 변환 실패를 0으로 덮지 않는다(=원인 은닉 방지)
+    Treemap용 최신 비중 데이터
+    정책: (중요) '자산별 최신 1행'이 아니라 '최신 날짜(기준일) 1일치 스냅샷'을 사용한다.
     """
     query = build_daily_snapshots_query(
         select_cols="date, asset_id, valuation_amount, assets(currency)",
@@ -132,54 +132,43 @@ def load_latest_asset_weights(account_id: str, start_date: str, end_date: str) -
     if not rows:
         return pd.DataFrame()
 
-    # ✅ 1) 원본 rows 샘플 확인(문제 추적용)
-    # 필요 시 잠깐 켜서 확인 후 제거하세요.
-    # import streamlit as st
-    # st.write("rows[0] keys:", list(rows[0].keys()))
-    # st.write("rows[0] sample:", rows[0])
-
     df = pd.DataFrame(rows)
     if df.empty:
         return pd.DataFrame()
 
-    # ✅ 2) 필수 컬럼 존재 확인(없으면 바로 원인)
-    required = {"date", "asset_id", "valuation_amount"}
-    missing = required - set(df.columns)
-    if missing:
-        raise RuntimeError(f"daily_snapshots query result missing columns: {missing}. "
-                           f"Got columns={list(df.columns)}")
-
-    # ✅ 3) 타입 정리
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["asset_id"] = pd.to_numeric(df["asset_id"], errors="coerce")
-
-    # ✅ 핵심: 조용히 0으로 덮지 않고 안전 변환 후 dropna
     df["valuation_amount"] = _safe_float_series(df["valuation_amount"], "valuation_amount")
 
-    # ✅ assets(currency) 펼치기
     df["currency"] = df["assets"].apply(
         lambda x: (x.get("currency") or "").lower().strip() if isinstance(x, dict) else ""
     )
     df.drop(columns=["assets"], inplace=True, errors="ignore")
 
-    # ✅ 4) 유효 행만 남김
     df = df.dropna(subset=["date", "asset_id", "valuation_amount"])
     if df.empty:
-        raise RuntimeError(
-            "valuation_amount 변환 결과가 전부 NaN입니다. "
-            "rows[0]를 출력해서 valuation_amount 형태(문자열/딕트/누락)를 확인하세요."
-        )
+        return pd.DataFrame()
 
-    # ✅ 5) asset_id별 최신 1행
-    df = df.sort_values(["asset_id", "date"])
-    df_latest = df.groupby("asset_id", as_index=False).tail(1).copy()
+    # ✅ 최신 날짜 기준(포트폴리오 기준일)
+    latest_date = df["date"].max()
+    df = df[df["date"] == latest_date].copy()
 
-    # ✅ 6) USD 환산(벡터화)
+    # ✅ 보유분만(0은 제외) + (account_id=ALL이면 중복 합산 방지 차원에서 groupby)
+    df = df[df["valuation_amount"] > 0].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    df = (
+        df.groupby(["date", "asset_id", "currency"], as_index=False)["valuation_amount"]
+        .sum()
+    )
+
+    # ✅ USD 환산
     fx = FxService.fetch_usdkrw()
     usdkrw = float(fx.rate)
 
-    is_usd = df_latest["currency"].fillna("").eq("usd")
-    df_latest["valuation_amount_krw"] = df_latest["valuation_amount"]
-    df_latest.loc[is_usd, "valuation_amount_krw"] = df_latest.loc[is_usd, "valuation_amount_krw"] * usdkrw
+    df["valuation_amount_krw"] = df["valuation_amount"]
+    is_usd = df["currency"].fillna("").eq("usd")
+    df.loc[is_usd, "valuation_amount_krw"] = df.loc[is_usd, "valuation_amount_krw"] * usdkrw
 
-    return df_latest[["date", "asset_id", "valuation_amount", "currency", "valuation_amount_krw"]].copy()
+    return df[["date", "asset_id", "valuation_amount", "currency", "valuation_amount_krw"]].copy()

@@ -293,7 +293,11 @@ def resolve_date_range(period: str):
     """
     end_date = date.today()
 
-    if period == "1M":
+    if period == "오늘":
+        start_date = end_date
+    elif period == "3일":
+        start_date = end_date - timedelta(days=3)
+    elif period == "1M":
         start_date = end_date - timedelta(days=30)
     elif period == "3M":
         start_date = end_date - timedelta(days=90)
@@ -317,7 +321,7 @@ def render_period_selector():
 
     period = st.sidebar.radio(
         "조회 기간",
-        options=["1M", "3M", "YTD", "ALL"],
+        options=["오늘", "3일", "1M", "3M", "YTD", "ALL"],
         index=0  # 기본값: 3M
     )
 
@@ -336,6 +340,12 @@ def render_asset_weight_section(account_id, start_date, end_date):
     
     df = build_asset_weight_df(rows)
     
+    # 총액이 0인 날짜는 제거(의미 없는 구간 제거)
+    # df는 build_asset_weight_df 결과(valuation_amount_krw, total_amount_krw가 있음)
+    df = df[df["total_amount_krw"] > 0].copy()
+    if df.empty:
+        st.info("자산 비중 데이터가 없습니다. (평가금액 합계가 0인 날짜만 존재)")
+        return
     
     # TODO: 디버깅(차후 제거)
     print("rows>>>>>>>>>>", rows[-1])
@@ -499,7 +509,11 @@ def render_asset_contribution_stacked_area(
     )
     top_assets = set(latest_cum.head(top_n)["asset_id"].tolist())
     df_plot = df[df["asset_id"].isin(top_assets)].copy()
-    # df_plot["date"] = pd.to_datetime(df_plot["date"]).dt.strftime("%Y-%m-%d")
+    
+    if df_plot.empty:
+        st.warning("누적 기여도 차트에 표시할 데이터가 없습니다. (필터링 결과 empty)")
+        return
+    
     df_plot["date"] = pd.to_datetime(df_plot["date"])  # ✅ datetime 유지
     
     # =========================
@@ -590,8 +604,8 @@ def render_portfolio_treemap(
 
         # ✅ KRW 환산이 있으면 그 값을 사용
         value_col = "valuation_amount_krw" if "valuation_amount_krw" in df_w.columns else "valuation_amount"
-        
-        if df_w.empty or df_w["valuation_amount_krw"].sum() <= 0:
+
+        if df_w.empty or df_w[value_col].sum() <= 0:
             st.warning("표시할 평가금액 데이터가 없습니다. (스냅샷 생성/수동입력 여부를 확인하세요)")
             return
         

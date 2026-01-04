@@ -59,6 +59,20 @@ if not account_id:
     
 start_date, end_date = render_period_selector()
 
+
+# --- 디버그: 단일 날짜 고정 모드 (원인 규명용) ---
+with st.sidebar.expander("🧪 디버그 옵션", expanded=False):
+    debug_single_day = st.checkbox("단일 날짜로 고정", value=False)
+    debug_day = st.date_input("조회 날짜", value=end_date)
+
+if debug_single_day:
+    start_date = debug_day
+    end_date = debug_day
+
+st.sidebar.caption(f"DEBUG date_range: {start_date} ~ {end_date}")
+# --- 디버그: 단일 날짜 고정 모드 (원인 규명용) 끝 ---
+
+
 tab1, tab2 = st.tabs(["Dashboard", "Transactions"])
 
 with tab1:
