@@ -72,7 +72,7 @@ def render_snapshot_editor():
     # =========================
     mode = st.radio(
         "편집 모드",
-        ["단일 계좌", "전체 계좌(멀티 편집)"],
+        ["전체 계좌(멀티 편집)", "단일 계좌"],
         index=0,
         horizontal=True,
         disabled=st.session_state["snap_busy"],

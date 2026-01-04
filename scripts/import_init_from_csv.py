@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
 
 
-CSV_PATH = "snapshot_260102.csv"   # ✅ 파일 경로에 맞게 수정
+CSV_PATH = "./snapshot_260102.csv"   # ✅ 파일 경로에 맞게 수정
 TX_DATE = datetime(2026, 1, 2, tzinfo=timezone.utc)  # ✅ INIT 기준일(오늘)
 
 

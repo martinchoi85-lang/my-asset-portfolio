@@ -496,7 +496,7 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
         # (C) 금액/단가 계산
         # -------------------------
         valuation_amount = float(current_qty) * float(valuation_price)
-        urchase_amount = float(total_purchase_amount)
+        purchase_amount = float(total_purchase_amount)
 
         # ✅ 요구사항: quantity=0이어도 row를 유지 (차트에서는 0이 사실상 보이지 않도록 필터링 가능)
         snapshots.append({
