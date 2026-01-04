@@ -19,12 +19,12 @@ def init_connection():
 
 supabase = init_connection()
 
-INIT_DATE = datetime(2025, 12, 16)
+INIT_DATE = datetime(2026, 1, 2)
 
 # =========================
 # CSV 로드
 # =========================
-df = pd.read_csv("asset_snapshot_with_additional_columns.csv")
+df = pd.read_csv("init_assets.csv")
 df = df.fillna("")
 
 # =========================
@@ -77,7 +77,7 @@ def get_or_create_asset(row):
         "ticker": ticker,
         "name_kr": row["종목명"],
         "asset_type": row["vehicle_type"],
-        "currency": "KRW" if row["economic_exposure_region"] == "Korea" else "USD",
+        "currency": "krw" if row["economic_exposure_region"] == "korea" else "usd",
         "market": row["economic_exposure_region"],
         "current_price": float(row["현재가"] or 0),
         "underlying_asset_class": row["underlying_asset_class"],
@@ -87,7 +87,7 @@ def get_or_create_asset(row):
         "fx_exposure_type": row["fx_exposure_type"],
         "return_driver": row["return_driver"],
         "strategy_type": row["strategy_type"],
-        "lookthrough_available": row["lookthrough_available"] == "Yes"
+        "lookthrough_available": row["lookthrough_available"] == True
     }).execute()
 
     return insert_resp.data[0]["id"]
@@ -96,7 +96,7 @@ def get_or_create_asset(row):
 # =========================
 # Helper: Insert initial transactions
 # =========================    
-INIT_DATE = "2025-12-16T00:00:00"
+INIT_DATE = "2026-01-02T00:00:00"
 
 def insert_init_transaction(asset_id, account_id, row):
     qty = float(row["잔고수량"] or 0)
@@ -123,7 +123,7 @@ def insert_init_transaction(asset_id, account_id, row):
 # Helper: TDF segments
 # =========================
 def insert_segments(asset_id, row):
-    if row.get("lookthrough_available") != "Yes":
+    if row.get("lookthrough_available") != True:
         return
 
     seg_classes = row.get("segment_asset_class")
@@ -168,7 +168,7 @@ def insert_segments(asset_id, row):
 # Main Loop (Supabase Version)
 # =========================
 
-INIT_DATE = "2025-12-16T00:00:00"
+INIT_DATE = "2026-01-02T00:00:00"
 
 for _, row in df.iterrows():
     # 1. Account

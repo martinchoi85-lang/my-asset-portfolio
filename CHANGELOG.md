@@ -20,6 +20,9 @@
 - Treemap 모드 전환 시 hover_data 설정 오류로 발생하는 ValueError 수정
 
 
+​
+
+
 ■ 2025-12-21 버전 프로젝트 구조
 transactions
    ↓

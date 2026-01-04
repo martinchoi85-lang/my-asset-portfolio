@@ -1,11 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import math
+import pandas as pd
 import yfinance as yf
 from datetime import date, datetime, timezone
 from typing import Optional, Dict, Any, List, Tuple
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
 from asset_portfolio.backend.services.transaction_service import TransactionService
+from asset_portfolio.backend.services.daily_snapshot_generator import generate_daily_snapshots
 
 
 @dataclass
@@ -155,18 +157,20 @@ class PriceUpdaterService:
 
         return None, None, last_err or "알 수 없는 실패"
 
+
     @staticmethod
     def update_asset_price(asset_id: int) -> PriceUpdateResult:
         """
         ✅ 단일 자산 current_price 업데이트 + 메타데이터 기록
-        - 성공: current_price, price_updated_at, status=ok, error=NULL, source=yfinance
-        - 실패: (current_price 유지) status=failed, error 저장, source=yfinance
+        - (중요) price_source는 '정책 컬럼'이므로 절대 덮어쓰지 않는다.
+        - price_source='manual'이면 무조건 스킵한다. (수동평가 자산 보호)
         """
         supabase = get_supabase_client()
 
+        # ✅ price_source까지 반드시 조회해서 manual 보호 로직을 적용
         row = (
             supabase.table("assets")
-            .select("id, ticker, market, current_price")
+            .select("id, ticker, asset_type, market, current_price, price_source")
             .eq("id", asset_id)
             .single()
             .execute()
@@ -179,18 +183,43 @@ class PriceUpdaterService:
         market = row.get("market")
         old_price = float(row.get("current_price") or 0.0)
 
-        # ✅ 한국 종목 정확도 개선: 후보(.KS/.KQ) + fast_info/history fallback을 쓰는 함수 활용
-        price, used_ticker, reason = PriceUpdaterService.fetch_price_from_yfinance(ticker, market)
+        # =========================
+        # ✅ 0) manual 자산 보호: 절대 yfinance로 덮지 않음
+        # =========================
+        policy_source = (row.get("price_source") or "").lower().strip()
+        asset_type = (row.get("asset_type") or "").lower().strip()
+        if policy_source == "manual" or asset_type == "cash":
+            # manual/cash는 스킵하되, 원하면 메타에 skipped 기록 가능
+            supabase.table("assets").update({
+                "price_updated_at": now.isoformat(),
+                "price_update_status": "skipped",
+                # "price_update_error": "manual or cash",
+                # "price_source": row.get("price_source"),  # ❌ 아예 포함하지 않는 것이 더 안전
+            }).eq("id", asset_id).execute()
 
+            return PriceUpdateResult(
+                asset_id=asset_id,
+                ticker=ticker,
+                ok=False,
+                old_price=old_price,
+                new_price=None,
+                reason="skipped (price_source=manual)",
+            )
+
+        # =========================
+        # 1) yfinance fetch
+        # =========================
+        price, used_ticker, reason = PriceUpdaterService.fetch_price_from_yfinance(ticker, market)
         now = datetime.now(timezone.utc)
 
         if price is None or float(price) <= 0:
-            # ✅ 실패: 기존 current_price는 유지하고, 메타만 기록
+            # ✅ 실패: current_price 유지 + 메타만 기록
+            # (중요) price_source 절대 변경 금지
             supabase.table("assets").update({
                 "price_updated_at": now.isoformat(),
                 "price_update_status": "failed",
                 "price_update_error": (str(reason)[:300] if reason else "unknown error"),
-                "price_source": "yfinance",
+                # "price_source": "yfinance",  # ❌ 절대 쓰면 안 됨
             }).eq("id", asset_id).execute()
 
             return PriceUpdateResult(
@@ -204,13 +233,13 @@ class PriceUpdaterService:
 
         new_price = float(price)
 
-        # ✅ 성공: current_price + 메타 기록
+        # ✅ 성공: current_price + 메타 기록(정책 컬럼 price_source는 건드리지 않음)
         supabase.table("assets").update({
             "current_price": new_price,
             "price_updated_at": now.isoformat(),
             "price_update_status": "ok",
             "price_update_error": None,
-            "price_source": "yfinance",
+            # "price_source": "yfinance",  # ❌ 절대 쓰면 안 됨
         }).eq("id", asset_id).execute()
 
         return PriceUpdateResult(
@@ -221,25 +250,51 @@ class PriceUpdaterService:
             new_price=new_price,
             reason=f"used={used_ticker}" if used_ticker else None,
         )
-                
-            
+        
+    
     @staticmethod
-    def update_many(asset_ids: List[int]) -> List[PriceUpdateResult]:
-        """
-        ✅ 여러 자산 가격 업데이트
-        """
-        results: List[PriceUpdateResult] = []
+    def update_many(asset_ids: list[int]) -> list[PriceUpdateResult]:
+        results: list[PriceUpdateResult] = []
+
         for aid in asset_ids:
-            results.append(PriceUpdaterService.update_asset_price(int(aid)))
+            try:
+                r = PriceUpdaterService.update_asset_price(int(aid))
+
+                # ✅ 절대 None이 results에 들어가지 않게 방어
+                if r is None:
+                    results.append(
+                        PriceUpdateResult(
+                            asset_id=int(aid),
+                            ticker="",
+                            ok=False,
+                            old_price=None,
+                            new_price=None,
+                            reason="update_asset_price returned None",
+                        )
+                    )
+                else:
+                    results.append(r)
+
+            except Exception as e:
+                results.append(
+                    PriceUpdateResult(
+                        asset_id=int(aid),
+                        ticker="",
+                        ok=False,
+                        old_price=None,
+                        new_price=None,
+                        reason=f"exception: {e}",
+                    )
+                )
+
         return results
 
-
-    # (핵심) 업데이트 후 스냅샷 자동 리빌드 연결
+    
     @staticmethod
     def _get_accounts_holding_asset(asset_id: int) -> List[str]:
         """
-        ✅ 해당 자산이 거래된 계좌 목록을 조회합니다.
-        - transactions에서 asset_id로 필터 후 account_id distinct
+        ✅ 해당 자산이 거래된 계좌 목록을 조회
+        - transactions에서 asset_id로 필터 후 account_id를 중복 제거
         """
         supabase = get_supabase_client()
         rows = (
@@ -249,9 +304,10 @@ class PriceUpdaterService:
             .execute()
             .data or []
         )
-        return sorted({r["account_id"] for r in rows if r.get("account_id")})
+        acc_ids = sorted({r["account_id"] for r in rows if r.get("account_id")})
+        return acc_ids
     
-
+    
     @staticmethod
     def _get_first_transaction_date(asset_id: int, account_id: str) -> date:
         """
@@ -277,29 +333,50 @@ class PriceUpdaterService:
 
     
     @staticmethod
-    def rebuild_snapshots_for_updated_assets(asset_ids: List[int]) -> Dict[str, int]:
+    def rebuild_snapshots_for_updated_assets(updated_asset_ids: list[int]) -> None:
         """
-        ✅ 가격 업데이트 성공한 자산들에 대해 스냅샷을 자동 리빌드합니다.
-        - 각 자산이 거래된 계좌들을 찾아
-        - 최초 거래일 ~ 오늘 범위를 리빌드합니다.
+        ✅ 가격 업데이트 후 스냅샷 자동 리빌드
+        - 리팩터링 중 내부 helper가 없어져도 동작하도록
+          여기서 직접 transactions를 조회해 account 목록을 만든다.
         """
-        rebuilt_total_rows = 0
+        supabase = get_supabase_client()
 
-        for asset_id in asset_ids:
-            account_ids = PriceUpdaterService._get_accounts_holding_asset(asset_id)
+        if not updated_asset_ids:
+            return
 
-            for account_id in account_ids:
-                start = PriceUpdaterService._get_first_transaction_date(asset_id, account_id)
-                end = date.today()
+        # =========================
+        # 1) 업데이트된 자산이 등장한 계좌 목록 조회
+        # =========================
+        tx_rows = (
+            supabase.table("transactions")
+            .select("account_id, asset_id, transaction_date")
+            .in_("asset_id", [int(x) for x in updated_asset_ids])
+            .execute()
+            .data or []
+        )
+        if not tx_rows:
+            return
 
-                # ✅ 멱등 리빌드(delete-range + upsert)
-                rebuilt = TransactionService.rebuild_daily_snapshots_for_asset(
-                    account_id=account_id,
-                    asset_id=asset_id,
-                    start_date=start,
-                    end_date=end,
-                    delete_first=True,
-                )
-                rebuilt_total_rows += rebuilt
+        tx_df = pd.DataFrame(tx_rows)
+        if tx_df.empty:
+            return
 
-        return {"rebuilt_total_rows": rebuilt_total_rows}
+        # ✅ account_id별로 최소 시작일을 잡아 리빌드 비용을 줄임
+        tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
+        start_by_account = (
+            tx_df.groupby("account_id")["transaction_date"]
+                 .min()
+                 .dt.date
+                 .to_dict()
+        )
+
+        # =========================
+        # 2) 계좌별로 스냅샷 리빌드
+        # - end_date는 사용자 정책대로 date.today()
+        # =========================
+        for account_id, start_date in start_by_account.items():
+            generate_daily_snapshots(
+                account_id=str(account_id),
+                start_date=start_date,
+                end_date=date.today(),
+            )

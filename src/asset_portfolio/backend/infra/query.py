@@ -1,8 +1,18 @@
 from typing import Optional
+from datetime import date, datetime
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
 
 
 ALL_ACCOUNT_TOKEN = "__ALL__"
+
+def _as_date_str(x):
+    if x is None:
+        return None
+    if isinstance(x, (date, datetime)):
+        return x.strftime("%Y-%m-%d")
+    s = str(x)
+    return s[:10]  # "YYYY-MM-DD..." -> "YYYY-MM-DD"
+
 
 def build_daily_snapshots_query(
     select_cols: str,
@@ -25,10 +35,10 @@ def build_daily_snapshots_query(
 
     # ✅ start_date, end_date, account_id가 있을 때만 필터 적용 (None-safe)
     if start_date is not None:
-        q = q.gte("date", start_date)
+        q = q.gte("date", _as_date_str(start_date))
 
     if end_date is not None:
-        q = q.lte("date", end_date)
+        q = q.lte("date", _as_date_str(end_date))
 
     if account_id and account_id != ALL_ACCOUNT_TOKEN:
         q = q.eq("account_id", account_id)

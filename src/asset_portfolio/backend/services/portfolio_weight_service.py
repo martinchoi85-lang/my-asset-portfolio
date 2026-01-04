@@ -2,6 +2,7 @@ from __future__ import annotations
 import pandas as pd
 from typing import Dict, List, Optional
 from asset_portfolio.backend.infra.query import build_daily_snapshots_query
+from asset_portfolio.backend.services.fx_service import FxService
 
 
 def load_asset_weight_timeseries(
@@ -10,109 +11,118 @@ def load_asset_weight_timeseries(
     end_date: Optional[str] = None,
 ) -> List[Dict]:
     """
-    자산 비중 시계열을 만들기 위한 원천 데이터 로드.
-    - daily_snapshots에서 date, asset_id, valuation_amount를 가져오고
-    - account_id가 __ALL__이면 계좌 필터를 걸지 않음
-    - 결과는 "row list"로 반환 (이후 pandas에서 집계/계산)
+    자산 비중 시계열 원천 데이터 로드
+    - currency까지 가져와서 '기준통화(KRW) 환산'이 가능하도록 한다.
     """
-
-    # ✅ 조인으로 자산명을 같이 받되, 계산/집계는 pandas에서 확실히 한다.
     query = build_daily_snapshots_query(
-        select_cols="date, asset_id, valuation_amount, assets(name_kr)",
+        # ✅ assets(currency, name_kr)까지 같이 가져오기
+        select_cols="date, asset_id, valuation_amount, assets(name_kr, currency)",
         start_date=start_date,
         end_date=end_date,
         account_id=account_id,
     )
-
     response = query.order("date").execute()
     return response.data or []
 
 
 def build_asset_weight_df(rows: List[Dict]) -> pd.DataFrame:
     """
-    ALL/단일 계좌 모두 안정적으로 동작하는 자산 비중 DF 생성.
-    반환 DF 스키마:
-      - date (datetime64[ns])
-      - asset_id (int)
-      - asset_name (str)
-      - valuation_amount (float)
-      - total_amount (float)     # date별 전체 평가금액
-      - weight (float)           # valuation_amount / total_amount
+    ✅ ALL/단일 계좌 모두 안전한 비중 DF 생성 + USD 환산 반영
 
-    중요:
-    - pivot 에러 방지를 위해 (date, asset_id) 기준으로 유일하게 만들어둔다.
+    반환 DF 주요 컬럼:
+      - date
+      - asset_id
+      - asset_name
+      - currency
+      - valuation_amount (원통화)
+      - valuation_amount_krw (환산)
+      - total_amount_krw
+      - weight_krw
     """
-
     df = pd.DataFrame(rows)
     if df.empty:
         return df
 
     # =========================
-    # 1) assets(name_kr) 조인 결과 펼치기
+    # 1) assets 조인 결과 펼치기
     # =========================
-    # row 예시:
-    # {
-    #   "date": "2025-12-16",
-    #   "asset_id": 1,
-    #   "valuation_amount": "12345",
-    #   "assets": {"name_kr": "KODEX 200"}
-    # }
-    df["asset_name"] = df["assets"].apply(
-        lambda x: x.get("name_kr") if isinstance(x, dict) else None
-    )
+    df["asset_name"] = df["assets"].apply(lambda x: x.get("name_kr") if isinstance(x, dict) else None)
+    df["currency"] = df["assets"].apply(lambda x: (x.get("currency") or "").lower().strip() if isinstance(x, dict) else "")
     df.drop(columns=["assets"], inplace=True, errors="ignore")
 
     # =========================
     # 2) 타입 정리
     # =========================
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce").fillna(0.0)
-
-    # 혹시 asset_id가 문자열로 들어오는 경우 대비
+    # df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce").fillna(0.0)
     df["asset_id"] = pd.to_numeric(df["asset_id"], errors="coerce")
-
-    # 필수 값 누락 제거
     df = df.dropna(subset=["date", "asset_id"])
 
     # =========================
-    # 3) ✅ 핵심: (date, asset_id)로 집계해서 유일화
-    #    - 단일 계좌도 안전하게 처리
-    #    - ALL 계좌는 반드시 필요
+    # 3) (date, asset_id) 유일화
     # =========================
-    # name_kr는 asset_id별로 동일하므로, 집계 시 first를 사용
     df_agg = (
         df.groupby(["date", "asset_id"], as_index=False)
           .agg(
               valuation_amount=("valuation_amount", "sum"),
               asset_name=("asset_name", "first"),
+              currency=("currency", "first"),
           )
     )
 
     # =========================
-    # 4) 날짜별 총 평가금액 및 weight 계산
+    # 4) ✅ USD 환산
+    # - 합산/비중은 KRW 기준으로 계산해야 Treemap 등에서 정상 비중이 나온다.
     # =========================
-    df_agg["total_amount"] = df_agg.groupby("date")["valuation_amount"].transform("sum")
+    fx = FxService.fetch_usdkrw()
+    usdkrw = float(fx.rate)
 
-    # 0 division 방지
-    df_agg["weight"] = df_agg.apply(
-        lambda r: (r["valuation_amount"] / r["total_amount"]) if r["total_amount"] > 0 else 0.0,
+    def _to_krw(row) -> float:
+        # ✅ currency가 'usd'면 환율 곱
+        if (row.get("currency") or "") == "usd":
+            return float(row["valuation_amount"]) * usdkrw
+        return float(row["valuation_amount"])
+
+    df_agg["valuation_amount_krw"] = df_agg.apply(_to_krw, axis=1)
+
+    # =========================
+    # 5) 날짜별 총액 및 비중(KRW 기준)
+    # =========================
+    df_agg["total_amount_krw"] = df_agg.groupby("date")["valuation_amount_krw"].transform("sum")
+    df_agg["weight_krw"] = df_agg.apply(
+        lambda r: (r["valuation_amount_krw"] / r["total_amount_krw"]) if r["total_amount_krw"] > 0 else 0.0,
         axis=1
     )
 
-    # 보기 좋게 정렬
-    df_agg = df_agg.sort_values(["date", "valuation_amount"], ascending=[True, False])
-
+    df_agg = df_agg.sort_values(["date", "valuation_amount_krw"], ascending=[True, False])
     return df_agg
+
+
+def _safe_float_series(s: pd.Series, col_name: str) -> pd.Series:
+    """
+    ✅ Supabase 응답에서 numeric이 str/Decimal/None 등으로 섞여 들어와도 안전하게 float로 변환
+    - 변환 실패는 NaN으로 두고, 호출부에서 dropna/에러 처리
+    """
+    def _to_float(x):
+        if x is None:
+            return None
+        # Decimal/숫자/문자열 모두 float() 시도
+        try:
+            return float(x)
+        except Exception:
+            return None
+
+    out = s.apply(_to_float)
+    return pd.to_numeric(out, errors="coerce")
 
 
 def load_latest_asset_weights(account_id: str, start_date: str, end_date: str) -> pd.DataFrame:
     """
-    ✅ Treemap용 '현재 비중' 데이터
-    - 기존 버그: 전체 중 last_date 한 날짜만 잘라서 자산 누락 발생
-    - 개선: asset_id별로 end_date 이하 최신 스냅샷 1행을 선택
+    ✅ Treemap용 최신 비중 데이터 + USD 환산 포함
+    - (중요) valuation_amount 변환 실패를 0으로 덮지 않는다(=원인 은닉 방지)
     """
     query = build_daily_snapshots_query(
-        select_cols="date, asset_id, valuation_amount",
+        select_cols="date, asset_id, valuation_amount, assets(currency)",
         start_date=start_date,
         end_date=end_date,
         account_id=account_id,
@@ -122,13 +132,54 @@ def load_latest_asset_weights(account_id: str, start_date: str, end_date: str) -
     if not rows:
         return pd.DataFrame()
 
+    # ✅ 1) 원본 rows 샘플 확인(문제 추적용)
+    # 필요 시 잠깐 켜서 확인 후 제거하세요.
+    # import streamlit as st
+    # st.write("rows[0] keys:", list(rows[0].keys()))
+    # st.write("rows[0] sample:", rows[0])
+
     df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame()
+
+    # ✅ 2) 필수 컬럼 존재 확인(없으면 바로 원인)
+    required = {"date", "asset_id", "valuation_amount"}
+    missing = required - set(df.columns)
+    if missing:
+        raise RuntimeError(f"daily_snapshots query result missing columns: {missing}. "
+                           f"Got columns={list(df.columns)}")
+
+    # ✅ 3) 타입 정리
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce").fillna(0.0)
+    df["asset_id"] = pd.to_numeric(df["asset_id"], errors="coerce")
 
-    # ✅ asset_id별 최신 스냅샷 1행만 남김
+    # ✅ 핵심: 조용히 0으로 덮지 않고 안전 변환 후 dropna
+    df["valuation_amount"] = _safe_float_series(df["valuation_amount"], "valuation_amount")
+
+    # ✅ assets(currency) 펼치기
+    df["currency"] = df["assets"].apply(
+        lambda x: (x.get("currency") or "").lower().strip() if isinstance(x, dict) else ""
+    )
+    df.drop(columns=["assets"], inplace=True, errors="ignore")
+
+    # ✅ 4) 유효 행만 남김
+    df = df.dropna(subset=["date", "asset_id", "valuation_amount"])
+    if df.empty:
+        raise RuntimeError(
+            "valuation_amount 변환 결과가 전부 NaN입니다. "
+            "rows[0]를 출력해서 valuation_amount 형태(문자열/딕트/누락)를 확인하세요."
+        )
+
+    # ✅ 5) asset_id별 최신 1행
     df = df.sort_values(["asset_id", "date"])
-    df_latest = df.groupby("asset_id", as_index=False).tail(1)
+    df_latest = df.groupby("asset_id", as_index=False).tail(1).copy()
 
-    return df_latest[["date", "asset_id", "valuation_amount"]]
+    # ✅ 6) USD 환산(벡터화)
+    fx = FxService.fetch_usdkrw()
+    usdkrw = float(fx.rate)
 
+    is_usd = df_latest["currency"].fillna("").eq("usd")
+    df_latest["valuation_amount_krw"] = df_latest["valuation_amount"]
+    df_latest.loc[is_usd, "valuation_amount_krw"] = df_latest.loc[is_usd, "valuation_amount_krw"] * usdkrw
+
+    return df_latest[["date", "asset_id", "valuation_amount", "currency", "valuation_amount_krw"]].copy()

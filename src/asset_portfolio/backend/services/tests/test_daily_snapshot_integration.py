@@ -92,7 +92,7 @@ def test_daily_snapshot_generation(monkeypatch):
     # 테스트 데이터 준비
     # -------------------------
     fake_client.storage["assets"] = [
-        {"id": 1, "current_price": 120, "currency": "KRW"}
+        {"id": 1, "current_price": 120, "currency": "krw"}
     ]
 
     fake_client.storage["transactions"] = [

@@ -170,19 +170,20 @@ def calculate_portfolio_state_at_date(account_id: str, target_date: date):
 
     prices = (
         supabase.table("assets")
-        .select("id, current_price, currency")
+        .select("id, current_price, currency, asset_type")
         .in_("id", asset_ids)
         .execute()
         .data
     )
 
     price_map = {
-        a["id"]: {
-            "price": float(a["current_price"] or 0),
-            "currency": a["currency"]
-        }
-        for a in prices
+    a["id"]: {
+        "price": float(a["current_price"] or 0),
+        "currency": (a.get("currency") or "").lower().strip(),
+        "asset_type": (a.get("asset_type") or "").lower().strip(),
     }
+    for a in prices
+}
 
     # =========================
     # 4. 최종 결과 구성
@@ -194,11 +195,11 @@ def calculate_portfolio_state_at_date(account_id: str, target_date: date):
             continue
 
         current_price = price_map.get(asset_id, {}).get("price", 0)
-
-        # ✅ cash면 1로 강제 (asset_type='cash'를 쓰는 게 가장 좋음)
+        
+        # ✅ cash면 1로 강제
         if price_map.get(asset_id, {}).get("asset_type") == "cash":
-            current_price = 1
-
+            current_price = 1.0
+            
         currency = price_map.get(asset_id, {}).get("currency")
 
         valuation_amount = asset["quantity"] * current_price
@@ -404,7 +405,7 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
     asset_type = (asset_row.get("asset_type") or "").lower()
 
     # ✅ 현금 자산은 평가단가 1 고정
-    is_cash = (asset_type == "cash")
+    is_cash = (asset_type in ["cash", "deposit", "fund"])
 
     # ✅ 비현금 자산은 assets.current_price를 평가단가로 사용 (V1.1)
     # - 주의: 이 값은 과거 날짜에도 동일하게 적용됩니다. (가격 히스토리 테이블 도입 전까지의 한계)

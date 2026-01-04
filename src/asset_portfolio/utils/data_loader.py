@@ -131,8 +131,8 @@ def get_lookup_data():
     is_account_empty = account_lookup.empty
 
     code_map = {
-        'asset_type': {'stock': '주식', 'us_stock': '미국 주식', 'cash': '현금', 'fund': '펀드', 
-                       'bond': '채권', 'gold': '금', 'etf': 'ETF', 'commodity': '원자재'},
+        'asset_type': {'stock': '주식', 'stock': '주식', 'cash': '현금', 'fund': '펀드', 
+                       'bond': '채권', 'gold': '금', 'etf': 'ETF'},
         'currency': {'won': '한화', 'usd': '달러', 'jpy': '엔화', '': '기타'},
         'market': {'korea': '한국', 'us': '미국', 'jp': '일본', '': '기타'},
     }
@@ -144,8 +144,8 @@ def get_lookup_data():
         'markets': list(code_map['market'].values()),
         'account_owners': account_lookup['owner'].dropna().unique().tolist() if not is_account_empty else ["승엽", "민희"],
         'account_types': account_lookup['type'].dropna().unique().tolist() if not is_account_empty else ["일반", "ISA", "DC", "IRP", "연금저축"],
-        'type_to_kr': {'stock': '주식', 'us_stock': '미국 주식', 'cash': '현금', 'fund': '펀드', 
-                       'bond': '채권', 'gold': '금', 'etf': 'ETF', 'commodity': '원자재'}, 
+        'type_to_kr': {'stock': '주식', 'stock': '주식', 'cash': '현금', 'fund': '펀드', 
+                       'bond': '채권', 'gold': '금', 'etf': 'ETF'}, 
         'code_map': code_map,
     }
 

@@ -64,7 +64,7 @@ def render_snapshot_editor():
 
     manual_assets = _load_manual_assets_df()
     if manual_assets.empty:
-        st.info("수동평가 대상 자산(asset_type)이 없습니다. assets에 manual_valuation/bond/deposit/pension 등을 지정하세요.")
+        st.info("수동평가 대상 자산(asset_type)이 없습니다. assets에 manual/bond/deposit/pension 등을 지정하세요.")
         return
 
     # =========================
@@ -134,7 +134,23 @@ def render_snapshot_editor():
     snap_df = _load_snapshots_for_date_multi(account_ids, snap_date, selected_asset_ids)
 
     # 없으면 편집 가능하도록 (계좌 × 자산) 전체 조합을 생성
-    grid = pd.MultiIndex.from_product([account_ids, selected_asset_ids], names=["account_id", "asset_id"]).to_frame(index=False)
+    # grid = pd.MultiIndex.from_product([account_ids, selected_asset_ids], names=["account_id", "asset_id"]).to_frame(index=False)
+
+        # =========================
+    # ✅ (중요) 멀티 편집에서는 '전체 곱'이 아니라
+    #         실제 존재하는 (account_id, asset_id) pair만 로드합니다.
+    # =========================
+    pairs_df = _load_existing_pairs_for_manual_assets(
+        account_ids=account_ids,
+        asset_ids=selected_asset_ids,
+        snap_date=snap_date,
+    )
+
+    if pairs_df.empty:
+        st.info("선택한 계좌들에서 현재 날짜 기준으로 존재하는 수동평가 자산이 없습니다. (스냅샷/거래 기반 pair가 없음)")
+        st.stop()
+
+    grid = pairs_df.copy()  # ✅ 이제 grid는 실제 존재하는 pair만 포함
 
     if snap_df.empty:
         base_df = grid.copy()
@@ -227,3 +243,55 @@ def render_snapshot_editor():
             st.error(f"저장 실패: {e}")
         finally:
             st.session_state["snap_busy"] = False
+
+
+def _load_existing_pairs_for_manual_assets(
+    account_ids: list[str],
+    asset_ids: list[int],
+    snap_date: date,
+) -> pd.DataFrame:
+    """
+    ✅ 멀티 편집에서 '해당 계좌에 실제로 존재하는 자산'만 보여주기 위한 (account_id, asset_id) pair 조회
+
+    우선순위:
+    1) daily_snapshots: snap_date 기준 valuation_amount > 0 인 pair
+    2) (없으면) transactions: 과거 어떤 거래라도 있는 pair
+    """
+    supabase = get_supabase_client()
+
+    # =========================
+    # 1) daily_snapshots 기반(당일 존재하는 자산)
+    # =========================
+    snap_rows = (
+        supabase.table("daily_snapshots")
+        .select("account_id, asset_id, valuation_amount")
+        .eq("date", snap_date.isoformat())
+        .in_("account_id", account_ids)
+        .in_("asset_id", asset_ids)
+        .execute()
+        .data or []
+    )
+    snap_df = pd.DataFrame(snap_rows)
+    if not snap_df.empty:
+        snap_df["valuation_amount"] = pd.to_numeric(snap_df["valuation_amount"], errors="coerce").fillna(0.0)
+        snap_df = snap_df[snap_df["valuation_amount"] > 0].copy()
+        if not snap_df.empty:
+            return snap_df[["account_id", "asset_id"]].drop_duplicates()
+
+    # =========================
+    # 2) transactions 기반(과거라도 거래가 있던 자산)
+    # - 스냅샷이 아직 없을 수도 있으니 fallback으로 사용
+    # =========================
+    tx_rows = (
+        supabase.table("transactions")
+        .select("account_id, asset_id")
+        .in_("account_id", account_ids)
+        .in_("asset_id", asset_ids)
+        .execute()
+        .data or []
+    )
+    tx_df = pd.DataFrame(tx_rows)
+    if tx_df.empty:
+        return tx_df
+
+    return tx_df[["account_id", "asset_id"]].drop_duplicates()

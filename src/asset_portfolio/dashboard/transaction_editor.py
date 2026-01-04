@@ -11,7 +11,7 @@ from asset_portfolio.backend.services.transaction_service import CreateTransacti
 
 @st.cache_data(ttl=300)
 def _load_accounts_df() -> pd.DataFrame:
-    from asset_portfolio.backend.infra.supabase_client import get_supabase_client
+    # from asset_portfolio.backend.infra.supabase_client import get_supabase_client
     supabase = get_supabase_client()
     rows = (
         supabase.table("accounts")
@@ -160,7 +160,7 @@ def render_transaction_editor():
 
     # (A) 입금/출금: CASH 고정 + 통화 선택
     if trade_type in {"DEPOSIT", "WITHDRAW"}:
-        cash_ccy = st.selectbox("입출금 통화", ["KRW", "USD"], index=0)
+        cash_ccy = st.selectbox("입출금 통화", ["krw", "usd"], index=0)
 
         try:
             asset_id = _find_cash_asset_id(cash_ccy)
@@ -181,7 +181,7 @@ def render_transaction_editor():
         # ✅ 최소 입력 필드
         new_ticker = st.text_input("티커(중복 불가)", value="")
         new_name = st.text_input("자산명(한글)", value="")
-        new_currency = st.selectbox("통화", ["KRW", "USD"], index=0)
+        new_currency = st.selectbox("통화", ["krw", "usd"], index=0)
 
         # ✅ asset_type은 프로젝트 정책에 맞게 확장 가능
         new_asset_type = st.selectbox("자산 유형", ["stock", "etf", "fund", "cash", "etc"], index=1)

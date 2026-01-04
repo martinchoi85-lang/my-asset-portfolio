@@ -35,7 +35,7 @@ def _get_all_asset_ids_for_price_update() -> list[int]:
         .data or []
     )
 
-    excluded = {"cash", "manual_valuation", "deposit", "bond"}  # ✅ 필요 시 확장
+    excluded = {"cash", "manual", "deposit", "bond"}  # ✅ 필요 시 확장
     ids: list[int] = []
     for r in rows:
         at = (r.get("asset_type") or "").lower().strip()

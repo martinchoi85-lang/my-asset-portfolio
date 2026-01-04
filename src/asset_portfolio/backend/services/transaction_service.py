@@ -10,6 +10,7 @@ from asset_portfolio.backend.services.portfolio_calculator import calculate_dail
 
 # V1 trade types
 TRADE_TYPES = {"BUY", "SELL", "INIT", "DEPOSIT", "WITHDRAW"}
+MANUAL_PRICE_SOURCES = {"manual"}  # 필요시 {"manual","snapshot"} 등 확장
 
 # 자산명/티커로 판별하지 않고, asset_type='cash' 등을 쓰면 가장 좋지만
 # 현재 스키마에서 확실히 보장되지 않으므로, V1에서는 ticker/name_kr로도 보조 확인 가능
@@ -40,6 +41,27 @@ class TransactionService:
             yield rows[i:i + size]
 
     @staticmethod
+    def _is_manual_asset(asset_id: int) -> bool:
+        """
+        ✅ 수동평가 자산 여부 판단
+        - price_source == 'manual' 이면, daily_snapshots는 Snapshot Editor가 관리하는 것으로 간주
+        - 이 자산들은 'delete 후 재생성' 리빌드를 금지한다 (수동 입력값이 날아감)
+        """
+        supabase = get_supabase_client()
+        row = (
+            supabase.table("assets")
+            .select("price_source, asset_type")
+            .eq("id", asset_id)
+            .single()
+            .execute()
+            .data
+        ) or {}
+
+        price_source = (row.get("price_source") or "").lower().strip()
+        # asset_type으로도 보조 판정하고 싶으면 여기에 추가 가능
+        return price_source in MANUAL_PRICE_SOURCES
+    
+    @staticmethod
     def _get_asset_cash_flag(asset_id: int) -> bool:
         """
         CASH_KRW / CASH_USD 여부 판단:
@@ -64,10 +86,6 @@ class TransactionService:
 
         if asset_type == "cash":
             return True
-        # if "CASH" in ticker:
-        #     return True
-        # if "CASH" in name_kr:
-        #     return True
         return False
 
     @staticmethod
@@ -128,9 +146,19 @@ class TransactionService:
     ) -> int:
         """
         (account_id, asset_id, date range)에 대해 daily_snapshots를 리빌드한다.
-        - V1: delete 후 upsert로 멱등성 확보
-        - end_date는 date.today() 기본 사용(호출자가 전달)
+
+        ✅ 중요 정책:
+        - manual 자산(price_source='manual')은 Snapshot Editor가 관리한다.
+          → 자동 리빌드로 삭제/재생성하면 사용자가 입력한 평가금액이 날아가므로 리빌드 금지.
         """
+        # =========================
+        # 0) manual 자산은 리빌드 제외
+        # =========================
+        if TransactionService._is_manual_asset(asset_id):
+            # 사용자가 원할 경우: "manual도 리빌드" 옵션을 별도로 만들 수 있으나
+            # 기본값은 반드시 제외가 안전합니다.
+            return 0
+
         supabase = get_supabase_client()
 
         # 1) 계산
@@ -140,9 +168,9 @@ class TransactionService:
             start_date=start_date,
             end_date=end_date,
         )
+
+        # 거래가 없으면 기간 삭제(기존 정책)
         if not snapshots:
-            # 거래가 없으면 스냅샷을 0으로 유지할지 정책이 필요하지만,
-            # V1에서는 "해당 기간 row를 삭제"하고 종료하는 것이 자연스럽습니다.
             if delete_first:
                 (
                     supabase.table("daily_snapshots")
@@ -155,12 +183,12 @@ class TransactionService:
                 )
             return 0
 
-        # 2) date 직렬화 + 수치 타입 정규화(안전)
+        # 2) date 직렬화
         for r in snapshots:
             if isinstance(r.get("date"), date):
                 r["date"] = r["date"].isoformat()
 
-        # 3) delete (권장)
+        # 3) delete-range
         if delete_first:
             (
                 supabase.table("daily_snapshots")
@@ -172,7 +200,7 @@ class TransactionService:
                 .execute()
             )
 
-        # 4) upsert (chunk)
+        # 4) upsert
         inserted = 0
         for chunk in TransactionService._chunk(snapshots, size=500):
             supabase.table("daily_snapshots").upsert(
@@ -212,7 +240,7 @@ class TransactionService:
         rows = (
             supabase.table("assets")
             .select("id")
-            .eq("asset_type", "cash")
+            .in_("asset_type", ["cash","deposit","fund"])           
             .eq("currency", currency)
             .execute()
             .data or []

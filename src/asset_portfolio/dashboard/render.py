@@ -303,6 +303,11 @@ def resolve_date_range(period: str):
         start_date = None
     else:
         raise ValueError(f"Unknown period: {period}")
+    
+    
+    # 디버깅(차후 제거)
+    print("start_date, end_date>>>>>>>>>>", start_date, end_date)
+    
 
     return start_date, end_date
 
@@ -319,8 +324,6 @@ def render_period_selector():
     return resolve_date_range(period)
 
 
-import pandas as pd
-import streamlit as st
 
 def render_asset_weight_section(account_id, start_date, end_date):
     st.subheader("📊 자산 비중 변화")
@@ -330,8 +333,15 @@ def render_asset_weight_section(account_id, start_date, end_date):
         start_date=start_date,
         end_date=end_date,
     )
-
+    
     df = build_asset_weight_df(rows)
+    
+    
+    # TODO: 디버깅(차후 제거)
+    print("rows>>>>>>>>>>", rows[-1])
+    print("df.columns>>>>>>>>>>", df.columns)
+    print("df.info()>>>>>>>>>>", df.info())
+
 
     if df.empty:
         st.info("자산 비중 데이터가 없습니다.")
@@ -578,16 +588,24 @@ def render_portfolio_treemap(
         base = 22
         fontSizeByLeaf = max(12, min(base, int(28 - leaf_count * 0.6)))
 
+        # ✅ KRW 환산이 있으면 그 값을 사용
+        value_col = "valuation_amount_krw" if "valuation_amount_krw" in df_w.columns else "valuation_amount"
+        
+        if df_w.empty or df_w["valuation_amount_krw"].sum() <= 0:
+            st.warning("표시할 평가금액 데이터가 없습니다. (스냅샷 생성/수동입력 여부를 확인하세요)")
+            return
+        
         fig = px.treemap(
             df_w,
             path=["market", "asset_type", "name_kr"],
-            values="valuation_amount",
+            values=value_col,
             # ✅ 자산유형별로 색을 다르게 주면 시각적으로 훨씬 구분이 잘 됩니다.
             color="asset_type",
             # ✅ 여러 색을 제공하는 팔레트(원하는 것으로 바꿔도 됨)
             # color_discrete_sequence=px.colors.qualitative.Set3,  # 최초 팔레트
-            # color_discrete_sequence=px.colors.qualitative.Alphabet,  # 색 종류 많은 팔레트
-            color_discrete_sequence=px.colors.diverging.RdYlGn,   # 값에 따른 그레디언트 팔레트
+            color_discrete_sequence=px.colors.qualitative.Alphabet,  # 색 종류 많은 팔레트
+            # color_continuous_scale=px.colors.diverging.RdYlGn,
+            # color_discrete_sequence=px.colors.diverging.RdYlGn,   # 값에 따른 그레디언트 팔레트
             # ✅ Plotly가 자동으로 보여주는 필드명을 한글로 바꿉니다.
             labels=LABELS,
             # ✅ hover에 보여줄 값을 명시적으로 통제할 수 있습니다.

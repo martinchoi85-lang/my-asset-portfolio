@@ -26,9 +26,9 @@ def render_asset_editor():
     ticker = st.text_input("티커", value=str(row["ticker"]), disabled=True)  # 안전하게 비활성
     name_kr = st.text_input("자산명(한글)", value=str(row["name_kr"]))
 
-    market = st.selectbox("시장", ["Korea", "US", "etc"], index=["Korea","US","etc"].index(str(row.get("market") or "etc")))
-    asset_type = st.selectbox("자산유형", ["cash", "Deposit", "ETF", "Fund", "TDF"], index=["cash", "Deposit", "ETF", "Fund", "TDF"].index(str(row.get("asset_type") or "etc")))
-    currency = st.selectbox("통화", ["KRW", "USD"], index=["KRW","USD"].index(str(row.get("currency") or "KRW").upper()))
+    market = st.selectbox("시장", ["Korea", "US", "etc"], index=["korea","us","etc"].index(str(row.get("market") or "etc")))
+    asset_type = st.selectbox("자산유형", ["cash", "Deposit", "ETF", "Fund", "TDF"], index=["cash", "deposit", "etf", "fund", "tdf"].index(str(row.get("asset_type") or "etc")))
+    currency = st.selectbox("통화", ["krw", "usd"], index=["krw","usd"].index(str(row.get("currency") or "krw").lower()))
 
     # 분류는 V1에서는 선택 옵션을 최소화
     underlying_asset_class = st.text_input("자산군(underlying_asset_class)", value=str(row.get("underlying_asset_class") or "Unknown"))
@@ -53,7 +53,7 @@ def render_asset_editor():
                     "name_kr": name_kr,
                     "market": market,
                     "asset_type": asset_type,
-                    "currency": currency.lower() if currency in ("KRW","USD") else currency,
+                    "currency": currency.lower() if currency in ("krw","usd") else currency,
                     "underlying_asset_class": underlying_asset_class,
                     "economic_exposure_region": economic_exposure_region,
                     "vehicle_type": vehicle_type,
