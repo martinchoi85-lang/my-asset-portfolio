@@ -405,7 +405,7 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
     asset_type = (asset_row.get("asset_type") or "").lower()
 
     # ✅ 현금 자산은 평가단가 1 고정
-    is_cash = (asset_type in ["cash", "deposit", "fund"])
+    is_cash = asset_type == "cash"
 
     # ✅ 비현금 자산은 assets.current_price를 평가단가로 사용 (V1.1)
     # - 주의: 이 값은 과거 날짜에도 동일하게 적용됩니다. (가격 히스토리 테이블 도입 전까지의 한계)

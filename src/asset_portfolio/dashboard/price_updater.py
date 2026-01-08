@@ -83,7 +83,14 @@ def render_price_updater():
 
             if auto_rebuild and ok_asset_ids:
                 with st.spinner("스냅샷 자동 리빌드 중..."):
-                    summary = PriceUpdaterService.rebuild_snapshots_for_updated_assets(ok_asset_ids)
+                    summary = PriceUpdaterService.rebuild_snapshots_for_updated_assets(ok_asset_ids) or {}
+                    rebuilt_rows = int(summary.get("rebuilt_total_rows", 0))
+                    rebuilt_pairs = summary.get("rebuilt_pairs", "?")
+                    
+                    if summary.get("errors"):
+                        st.warning("일부 계좌 리빌드 실패: " + " | ".join(summary["errors"][:3]))
+
+                    st.success(f"스냅샷 리빌드 완료: 총 {rebuilt_rows}행 (대상 {rebuilt_pairs} 조합)")
                 st.success(f"스냅샷 리빌드 완료: 총 {summary['rebuilt_total_rows']}행 (대상 {summary.get('rebuilt_pairs', '?')} 조합)")
 
             st.cache_data.clear()

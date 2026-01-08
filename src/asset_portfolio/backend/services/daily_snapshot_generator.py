@@ -17,6 +17,9 @@ def generate_daily_snapshots(account_id: str, start_date: date, end_date: date):
     특정 account에 대해
     거래가 존재하는 모든 자산의 daily snapshot을 생성한다.
     """
+    
+    # TODO: DEBUG 코드
+    print(f"[rebuild] account={account_id} asset={asset_id} start={start_date} end={end_date} today={date.today()}")
 
     supabase = get_supabase_client()
 
@@ -30,14 +33,18 @@ def generate_daily_snapshots(account_id: str, start_date: date, end_date: date):
         .execute()
     )
 
-    asset_ids = sorted(
-        {row["asset_id"] for row in (tx_resp.data or [])}
-    )
+    asset_ids = sorted({
+        row.get("asset_id")
+        for row in (tx_resp.data or [])
+        if row and row.get("asset_id") is not None
+    })
 
     if not asset_ids:
         print(f"[INFO] account_id={account_id} 에 대한 거래 내역이 없습니다.")
-        return
-
+        return {"account_id": account_id, "asset_count": 0, "total_rows": 0}
+    
+    total_rows = 0
+    
     # =========================
     # 2. 자산별 snapshot 생성
     # =========================
@@ -48,7 +55,6 @@ def generate_daily_snapshots(account_id: str, start_date: date, end_date: date):
             start_date=start_date,
             end_date=end_date,
         )
-
         if not snapshots:
             continue
 
@@ -66,7 +72,7 @@ def generate_daily_snapshots(account_id: str, start_date: date, end_date: date):
             on_conflict="date,asset_id, account_id",
         ).execute()
 
-        print(
-            f"[OK] asset_id={asset_id}, "
-            f"{len(snapshots)} rows inserted"
-        )
+        total_rows += len(snapshots)
+        print(f"[OK] asset_id={asset_id}, {len(snapshots)} rows inserted")
+
+    return {"account_id": account_id, "asset_count": len(asset_ids), "total_rows": total_rows}

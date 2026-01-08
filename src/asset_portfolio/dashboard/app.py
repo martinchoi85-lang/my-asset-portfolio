@@ -83,8 +83,8 @@ with tab1:
     render_asset_contribution_section_full(account_id, start_date, end_date)
     st.divider()
     render_asset_weight_section(account_id, start_date, end_date)
-    st.divider()
-    render_asset_contribution_stacked_area(account_id, start_date, end_date)
+    # st.divider()
+    # render_asset_contribution_stacked_area(account_id, start_date, end_date)
     st.divider()
     render_portfolio_treemap(account_id, start_date, end_date)
 

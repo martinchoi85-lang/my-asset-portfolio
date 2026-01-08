@@ -347,12 +347,6 @@ def render_asset_weight_section(account_id, start_date, end_date):
         st.info("자산 비중 데이터가 없습니다. (평가금액 합계가 0인 날짜만 존재)")
         return
     
-    # TODO: 디버깅(차후 제거)
-    print("rows>>>>>>>>>>", rows[-1])
-    print("df.columns>>>>>>>>>>", df.columns)
-    print("df.info()>>>>>>>>>>", df.info())
-
-
     if df.empty:
         st.info("자산 비중 데이터가 없습니다.")
         return
@@ -406,6 +400,16 @@ def render_asset_weight_section(account_id, start_date, end_date):
     # =========================
     # ✅ pivot은 asset_id로 (name_kr 변경/중복 대비)
     # =========================    
+    weight_col = None
+    for c in ["weight", "weight_krw", "weight_pct"]:
+        if c in df.columns:
+            weight_col = c
+            break
+
+    if weight_col is None:
+        st.error(f"자산 비중 컬럼이 없습니다. df.columns={list(df.columns)}")
+        return
+    
     df["date"] = pd.to_datetime(df["date"]).dt.date  # 시간 제거
     pivot = (
         df.pivot_table(

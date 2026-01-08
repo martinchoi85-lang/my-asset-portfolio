@@ -183,11 +183,14 @@ class PriceUpdaterService:
         market = row.get("market")
         old_price = float(row.get("current_price") or 0.0)
 
+        now = datetime.now(timezone.utc)
+        
         # =========================
         # ✅ 0) manual 자산 보호: 절대 yfinance로 덮지 않음
         # =========================
         policy_source = (row.get("price_source") or "").lower().strip()
         asset_type = (row.get("asset_type") or "").lower().strip()
+        
         if policy_source == "manual" or asset_type == "cash":
             # manual/cash는 스킵하되, 원하면 메타에 skipped 기록 가능
             supabase.table("assets").update({
@@ -203,14 +206,13 @@ class PriceUpdaterService:
                 ok=False,
                 old_price=old_price,
                 new_price=None,
-                reason="skipped (price_source=manual)",
+                reason="skipped (manual or cash)",
             )
 
         # =========================
         # 1) yfinance fetch
         # =========================
         price, used_ticker, reason = PriceUpdaterService.fetch_price_from_yfinance(ticker, market)
-        now = datetime.now(timezone.utc)
 
         if price is None or float(price) <= 0:
             # ✅ 실패: current_price 유지 + 메타만 기록
@@ -341,8 +343,15 @@ class PriceUpdaterService:
         """
         supabase = get_supabase_client()
 
+        summary = {
+            "rebuilt_total_rows": 0,
+            "rebuilt_pairs": 0,
+            "accounts": [],
+            "errors": [],
+        }
+
         if not updated_asset_ids:
-            return
+            return summary
 
         # =========================
         # 1) 업데이트된 자산이 등장한 계좌 목록 조회
@@ -359,15 +368,20 @@ class PriceUpdaterService:
 
         tx_df = pd.DataFrame(tx_rows)
         if tx_df.empty:
-            return
+            return summary
 
         # ✅ account_id별로 최소 시작일을 잡아 리빌드 비용을 줄임
         tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
+        tx_df = tx_df.dropna(subset=["account_id", "transaction_date"])  # ✅ NaT/None 제거        
+        
+        if tx_df.empty:
+            return summary
+    
         start_by_account = (
             tx_df.groupby("account_id")["transaction_date"]
-                 .min()
-                 .dt.date
-                 .to_dict()
+                .min()
+                .dt.date
+                .to_dict()
         )
 
         # =========================
@@ -375,8 +389,19 @@ class PriceUpdaterService:
         # - end_date는 사용자 정책대로 date.today()
         # =========================
         for account_id, start_date in start_by_account.items():
-            generate_daily_snapshots(
-                account_id=str(account_id),
-                start_date=start_date,
-                end_date=date.today(),
-            )
+            try:
+                # ✅ generate_daily_snapshots가 total_rows를 반환하도록(아래 1-B 참고)
+                res = generate_daily_snapshots(
+                    account_id=str(account_id),
+                    start_date=start_date,
+                    end_date=date.today(),
+                ) or {}
+
+                summary["accounts"].append(str(account_id))
+                summary["rebuilt_total_rows"] += int(res.get("total_rows", 0))
+                summary["rebuilt_pairs"] += int(res.get("asset_count", 0))
+
+            except Exception as e:
+                summary["errors"].append(f"account={account_id}: {e}")
+
+        return summary
