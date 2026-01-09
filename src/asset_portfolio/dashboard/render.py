@@ -54,6 +54,8 @@ def render_portfolio_return_section(account_id: str, start_date: str, end_date: 
     # =========================
     if not benchmark_df.empty:
         portfolio_df = align_portfolio_to_benchmark_calendar(portfolio_df, benchmark_df)
+    else:
+        st.warning("벤치마크 데이터를 불러오지 못했습니다. (네트워크/외부 API 이슈 가능)")
 
     # =========================
     # 4) KPI 요약 카드
@@ -346,10 +348,6 @@ def render_asset_weight_section(account_id, start_date, end_date):
     if df.empty:
         st.info("자산 비중 데이터가 없습니다. (평가금액 합계가 0인 날짜만 존재)")
         return
-    
-    if df.empty:
-        st.info("자산 비중 데이터가 없습니다.")
-        return
 
     # =========================
     # ✅ 안전 가드: asset_id가 없으면 pivot/집계 불가
@@ -403,7 +401,7 @@ def render_asset_weight_section(account_id, start_date, end_date):
 
     # 어떤 경로에서 오든 weight 컬럼을 안전하게 선택
     weight_col = None
-    for c in ["weight_krw", "weight", "weight_pct", "weight_krw_pct"]:
+    for c in ["weight", "weight_krw", "weight_pct", "weight_krw_pct"]:
         if c in df.columns:
             weight_col = c
             break

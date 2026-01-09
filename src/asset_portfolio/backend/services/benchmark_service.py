@@ -1,6 +1,7 @@
 import pandas as pd
 import yfinance as yf
 from pandas.tseries.offsets import BDay
+from asset_portfolio.backend.services.data_contracts import normalize_benchmark_df
 
 
 def load_cash_benchmark_series(start_date, end_date):
@@ -10,10 +11,10 @@ def load_cash_benchmark_series(start_date, end_date):
     """
     dates = pd.date_range(start=start_date, end=end_date)
 
-    return pd.DataFrame({
+    return normalize_benchmark_df(pd.DataFrame({
         "date": dates,
         "benchmark_return": [0.0] * len(dates),
-    })
+    }))
 
 
 def merge_portfolio_and_benchmark(
@@ -54,6 +55,8 @@ def _normalize_yf_download_df(df: pd.DataFrame) -> pd.DataFrame:
     # 예: ('Adj Close', '^GSPC') -> 'Adj Close'
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] for c in df.columns]
+
+    df = df.loc[:, ~df.columns.duplicated()].copy()
 
     # 2) 인덱스가 DatetimeIndex면 컬럼으로 빼서 date 표준화
     if isinstance(df.index, pd.DatetimeIndex):
@@ -129,14 +132,24 @@ def load_sp500_benchmark_series(start_date: str, end_date: str) -> pd.DataFrame:
         try:
             df = _download(s2, end_excl2)
         except Exception:
-            return pd.DataFrame()
+            return normalize_benchmark_df(pd.DataFrame())
 
     if df.empty:
-        return pd.DataFrame()
+        return normalize_benchmark_df(pd.DataFrame())
 
     # 5) 누적 수익률 산출 (Close 기준)
     df = df.sort_index()
-    df["benchmark_return"] = (df["Close"] / df["Close"].iloc[0]) - 1.0
+
+    price_col = None
+    for col in ["Adj Close", "Close", "Adj_Close", "adj close", "adjclose"]:
+        if col in df.columns:
+            price_col = col
+            break
+
+    if price_col is None:
+        return normalize_benchmark_df(pd.DataFrame())
+
+    df["benchmark_return"] = (df[price_col] / df[price_col].iloc[0]) - 1.0
 
     out = df.reset_index()
 
@@ -170,7 +183,7 @@ def load_sp500_benchmark_series(start_date: str, end_date: str) -> pd.DataFrame:
 
     out = out.dropna(subset=["date"])
 
-    return out[["date", "benchmark_return"]]
+    return normalize_benchmark_df(out[["date", "benchmark_return"]])
 
 
 def align_portfolio_to_benchmark_dates(

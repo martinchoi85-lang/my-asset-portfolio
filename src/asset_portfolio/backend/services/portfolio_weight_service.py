@@ -3,6 +3,10 @@ import pandas as pd
 from typing import Dict, List, Optional
 from asset_portfolio.backend.infra.query import build_daily_snapshots_query
 from asset_portfolio.backend.services.fx_service import FxService
+from asset_portfolio.backend.services.data_contracts import (
+    normalize_weight_df,
+    normalize_latest_weight_df,
+)
 
 
 def load_asset_weight_timeseries(
@@ -41,7 +45,7 @@ def build_asset_weight_df(rows: List[Dict]) -> pd.DataFrame:
     """
     df = pd.DataFrame(rows)
     if df.empty:
-        return df
+        return normalize_weight_df(df)
 
     # =========================
     # 1) assets 조인 결과 펼치기
@@ -89,13 +93,14 @@ def build_asset_weight_df(rows: List[Dict]) -> pd.DataFrame:
     # 5) 날짜별 총액 및 비중(KRW 기준)
     # =========================
     df_agg["total_amount_krw"] = df_agg.groupby("date")["valuation_amount_krw"].transform("sum")
-    df_agg["weight_krw"] = df_agg.apply(
+    df_agg["weight"] = df_agg.apply(
         lambda r: (r["valuation_amount_krw"] / r["total_amount_krw"]) if r["total_amount_krw"] > 0 else 0.0,
         axis=1
     )
+    df_agg["weight_krw"] = df_agg["weight"]
 
     df_agg = df_agg.sort_values(["date", "valuation_amount_krw"], ascending=[True, False])
-    return df_agg
+    return normalize_weight_df(df_agg)
 
 
 def _safe_float_series(s: pd.Series, col_name: str) -> pd.Series:
@@ -130,11 +135,11 @@ def load_latest_asset_weights(account_id: str, start_date: str, end_date: str) -
 
     rows = query.execute().data or []
     if not rows:
-        return pd.DataFrame()
+        return normalize_latest_weight_df(pd.DataFrame())
 
     df = pd.DataFrame(rows)
     if df.empty:
-        return pd.DataFrame()
+        return normalize_latest_weight_df(df)
 
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["asset_id"] = pd.to_numeric(df["asset_id"], errors="coerce")
@@ -147,7 +152,7 @@ def load_latest_asset_weights(account_id: str, start_date: str, end_date: str) -
 
     df = df.dropna(subset=["date", "asset_id", "valuation_amount"])
     if df.empty:
-        return pd.DataFrame()
+        return normalize_latest_weight_df(pd.DataFrame())
 
     # ✅ 최신 날짜 기준(포트폴리오 기준일)
     latest_date = df["date"].max()
@@ -156,7 +161,7 @@ def load_latest_asset_weights(account_id: str, start_date: str, end_date: str) -
     # ✅ 보유분만(0은 제외) + (account_id=ALL이면 중복 합산 방지 차원에서 groupby)
     df = df[df["valuation_amount"] > 0].copy()
     if df.empty:
-        return pd.DataFrame()
+        return normalize_latest_weight_df(pd.DataFrame())
 
     df = (
         df.groupby(["date", "asset_id", "currency"], as_index=False)["valuation_amount"]
@@ -171,4 +176,6 @@ def load_latest_asset_weights(account_id: str, start_date: str, end_date: str) -
     is_usd = df["currency"].fillna("").eq("usd")
     df.loc[is_usd, "valuation_amount_krw"] = df.loc[is_usd, "valuation_amount_krw"] * usdkrw
 
-    return df[["date", "asset_id", "valuation_amount", "currency", "valuation_amount_krw"]].copy()
+    return normalize_latest_weight_df(
+        df[["date", "asset_id", "valuation_amount", "currency", "valuation_amount_krw"]].copy()
+    )

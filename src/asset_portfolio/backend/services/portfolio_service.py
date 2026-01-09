@@ -5,6 +5,11 @@ from asset_portfolio.backend.infra.query import build_daily_snapshots_query
 from asset_portfolio.backend.services.portfolio_calculator import (
     calculate_asset_return_series_from_snapshots, calculate_portfolio_return_series_from_snapshots,
 )
+from asset_portfolio.backend.services.data_contracts import (
+    normalize_snapshot_df,
+    normalize_contribution_df,
+    CONTRIBUTION_COLUMNS,
+)
 
 """
 portfolio_service.py
@@ -107,10 +112,11 @@ def calculate_asset_contributions(
     """
 
     if not snapshots:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=CONTRIBUTION_COLUMNS)
 
-    df = pd.DataFrame(snapshots)
-    df["date"] = pd.to_datetime(df["date"])
+    df = normalize_snapshot_df(pd.DataFrame(snapshots))
+    if df.empty:
+        return pd.DataFrame(columns=CONTRIBUTION_COLUMNS)
 
     # =========================
     # date, asset_id 기준 정렬
@@ -151,11 +157,13 @@ def calculate_asset_contributions(
 
     df["contribution_pct"] = df["contribution"] * 100
 
-    return df[
-        [
-            "date",
-            "asset_id",
-            "contribution",
-            "contribution_pct",
+    return normalize_contribution_df(
+        df[
+            [
+                "date",
+                "asset_id",
+                "contribution",
+                "contribution_pct",
+            ]
         ]
-    ]
+    )
