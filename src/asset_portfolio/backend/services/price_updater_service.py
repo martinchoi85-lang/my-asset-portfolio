@@ -364,7 +364,7 @@ class PriceUpdaterService:
             .data or []
         )
         if not tx_rows:
-            return
+            return summary
 
         tx_df = pd.DataFrame(tx_rows)
         if tx_df.empty:

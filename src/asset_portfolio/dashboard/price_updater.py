@@ -91,7 +91,6 @@ def render_price_updater():
                         st.warning("일부 계좌 리빌드 실패: " + " | ".join(summary["errors"][:3]))
 
                     st.success(f"스냅샷 리빌드 완료: 총 {rebuilt_rows}행 (대상 {rebuilt_pairs} 조합)")
-                st.success(f"스냅샷 리빌드 완료: 총 {summary['rebuilt_total_rows']}행 (대상 {summary.get('rebuilt_pairs', '?')} 조합)")
 
             st.cache_data.clear()
             st.success("완료되었습니다. (실패 종목은 사유/스테일 상태를 확인하세요)")

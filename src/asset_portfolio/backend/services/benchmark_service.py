@@ -1,5 +1,7 @@
 import pandas as pd
 import yfinance as yf
+from pandas.tseries.offsets import BDay
+
 
 def load_cash_benchmark_series(start_date, end_date):
     """
@@ -74,58 +76,73 @@ def load_sp500_benchmark_series(start_date: str, end_date: str) -> pd.DataFrame:
     S&P 500 (^GSPC) 누적 수익률 시계열 생성.
 
     - yfinance 결과가 MultiIndex일 수 있음
-    - Adj Close 컬럼이 없을 수 있음
-    - 그런 경우 Close를 fallback으로 사용
+    - Adj Close 컬럼이 없을 수 있음(그런 경우 Close를 fallback으로 사용)
+    - yfinance의 end는 'exclusive' 이므로 end_date를 포함하려면 +1 day가 필요.
+      또한 start==end가 들어오면 최소 1일 구간으로 보정한다.
     - return: [date, benchmark_return] DataFrame
     """
     ticker = "^GSPC"
 
-    # ✅ 안정성 향상을 위해 auto_adjust=True 권장
-    # auto_adjust=True이면 보통 'Close' 자체가 조정 종가에 가까워져서
-    # 'Adj Close'가 아예 없을 수 있습니다.
-    raw = yf.download(
-        ticker,
-        start=start_date,
-        end=end_date,
-        progress=False,
-        auto_adjust=True,
-        actions=False,
-    )
+    # 1) 입력 정규화
+    s = pd.to_datetime(start_date).normalize()
+    e = pd.to_datetime(end_date).normalize()
 
-    df = _normalize_yf_download_df(raw)
-    if df.empty:
-        return pd.DataFrame()
+    # 2) start >= end 방어 (가끔 end_date가 "오늘"로 들어오는데 캘린더 정렬에서 동일해질 수 있음)
+    if e <= s:
+        e = s  # 같은 날이라면, 아래에서 end_exclusive로 +1 day 해줌
 
-    # ✅ 가격 컬럼 선택 우선순위
-    # 1) Adj Close (있는 경우)
-    # 2) Close
-    price_col = None
-    if "Adj Close" in df.columns:
-        price_col = "Adj Close"
-    elif "Close" in df.columns:
-        price_col = "Close"
+    # yfinance: end는 미포함(exclusive)
+    end_exclusive = e + pd.Timedelta(days=1)
 
-    if price_col is None:
-        # 여기까지 오면 yfinance 응답 포맷이 예상과 다르므로
-        # 디버깅에 도움이 되도록 컬럼을 보여줄 수 있게 예외 메시지 구성
-        raise KeyError(
-            f"S&P 500 benchmark price column not found. Available columns: {list(df.columns)}"
+    def _download(_s, _end_excl):
+        # ✅ 안정성 향상을 위해 auto_adjust=True 권장
+        # auto_adjust=True이면 보통 'Close' 자체가 조정 종가에 가까워져서
+        # 'Adj Close'가 아예 없을 수 있습니다.
+        raw = yf.download(
+            ticker,
+            start=_s,
+            end=_end_excl,
+            progress=False,
+            auto_adjust=True,
+            actions=False,
+            threads=False,
         )
+        df = _normalize_yf_download_df(raw)
+        return df
 
-    # 결측 제거 + 정렬
-    df = df[["date", price_col]].dropna().sort_values("date")
+    # 3) 1차 시도
+    try:
+        df = _download(s, end_exclusive)
+    except Exception:
+        df = pd.DataFrame()
+
+    # 4) 실패/빈 DF면: 전 영업일로 end를 당겨 재시도
+    if df.empty:
+        e2 = (e - BDay(1)).normalize()
+        # start가 end보다 커지면 최소 하루 확보
+        if e2 < s:
+            s2 = e2
+        else:
+            s2 = s
+        end_excl2 = e2 + pd.Timedelta(days=1)
+
+        try:
+            df = _download(s2, end_excl2)
+        except Exception:
+            return pd.DataFrame()
 
     if df.empty:
         return pd.DataFrame()
 
-    # 기준 가격 (첫 유효 가격)
-    base_price = float(df.iloc[0][price_col])
-    if base_price <= 0:
-        return pd.DataFrame()
-
-    df["benchmark_return"] = df[price_col].astype(float) / base_price - 1.0
-
-    return df[["date", "benchmark_return"]]
+    # 5) 누적 수익률 산출 (Close 기준)
+    df = df.sort_index()
+    df["benchmark_return"] = (df["Close"] / df["Close"].iloc[0]) - 1.0
+    out = df.reset_index().rename(columns={"Date": "date", "index": "date"})
+    # 날짜 컬럼명 normalize
+    if "date" not in out.columns:
+        out["date"] = out.iloc[:, 0]
+    out["date"] = pd.to_datetime(out["date"]).dt.date
+    return out[["date", "benchmark_return"]]
 
 
 def align_portfolio_to_benchmark_dates(

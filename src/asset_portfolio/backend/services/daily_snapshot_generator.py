@@ -18,9 +18,6 @@ def generate_daily_snapshots(account_id: str, start_date: date, end_date: date):
     거래가 존재하는 모든 자산의 daily snapshot을 생성한다.
     """
     
-    # TODO: DEBUG 코드
-    print(f"[rebuild] account={account_id} asset={asset_id} start={start_date} end={end_date} today={date.today()}")
-
     supabase = get_supabase_client()
 
     # =========================
@@ -69,7 +66,7 @@ def generate_daily_snapshots(account_id: str, start_date: date, end_date: date):
 
         supabase.table("daily_snapshots").upsert(
             snapshots,
-            on_conflict="date,asset_id, account_id",
+            on_conflict="date,asset_id,account_id",
         ).execute()
 
         total_rows += len(snapshots)
