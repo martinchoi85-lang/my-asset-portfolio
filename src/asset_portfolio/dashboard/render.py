@@ -400,8 +400,10 @@ def render_asset_weight_section(account_id, start_date, end_date):
     # =========================
     # ✅ pivot은 asset_id로 (name_kr 변경/중복 대비)
     # =========================    
+
+    # 어떤 경로에서 오든 weight 컬럼을 안전하게 선택
     weight_col = None
-    for c in ["weight", "weight_krw", "weight_pct"]:
+    for c in ["weight_krw", "weight", "weight_pct", "weight_krw_pct"]:
         if c in df.columns:
             weight_col = c
             break
@@ -409,14 +411,17 @@ def render_asset_weight_section(account_id, start_date, end_date):
     if weight_col is None:
         st.error(f"자산 비중 컬럼이 없습니다. df.columns={list(df.columns)}")
         return
-    
-    df["date"] = pd.to_datetime(df["date"]).dt.date  # 시간 제거
+
+    # df["date"] = pd.to_datetime(df["date"]).dt.date  # 시간 제거
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+    df = df.dropna(subset=["date"])
+
     pivot = (
         df.pivot_table(
             index="date",
             columns="asset_id",
-            values="weight",
-            aggfunc="sum",     # 혹시 남아있을 중복도 방어
+            values=weight_col,
+            aggfunc="sum",
         )
         .fillna(0)
         .sort_index()
@@ -437,7 +442,7 @@ def render_asset_weight_section(account_id, start_date, end_date):
     st.area_chart(pivot_display, height=350)
 
     with st.expander("📄 디버깅: weight 원본"):
-        st.dataframe(df.sort_values(["date", "weight"], ascending=[True, False]).head(200))
+        st.dataframe(df.sort_values(["date", weight_col], ascending=[True, False]).head(200))
 
 
 def render_asset_contribution_section(

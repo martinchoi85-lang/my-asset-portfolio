@@ -61,11 +61,6 @@ def load_portfolio_daily_snapshots(
 
     snapshots = query.execute().data or []
     
-    # TODO: 디버깅(차후 제거)
-    print("[load_portfolio_daily_snapshots] start,end,account,len=",
-            start_date, end_date, account_id, len(snapshots))
-    print("len(snapshots)>>>>>>>>>>", len(snapshots))
-
     # =========================
     # date 기준으로 합산
     # =========================

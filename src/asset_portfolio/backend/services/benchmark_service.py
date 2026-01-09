@@ -137,11 +137,39 @@ def load_sp500_benchmark_series(start_date: str, end_date: str) -> pd.DataFrame:
     # 5) 누적 수익률 산출 (Close 기준)
     df = df.sort_index()
     df["benchmark_return"] = (df["Close"] / df["Close"].iloc[0]) - 1.0
-    out = df.reset_index().rename(columns={"Date": "date", "index": "date"})
-    # 날짜 컬럼명 normalize
-    if "date" not in out.columns:
-        out["date"] = out.iloc[:, 0]
-    out["date"] = pd.to_datetime(out["date"]).dt.date
+
+    out = df.reset_index()
+
+    # normalize가 이미 date를 만들었다면 index는 제거
+    if "date" in out.columns and "index" in out.columns:
+        out = out.drop(columns=["index"])
+
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.date
+
+    # ✅ 날짜 컬럼을 1개로 확정 (중복 방지)
+    # yfinance/normalize에 따라 'Date', 'date', 또는 index가 섞일 수 있으므로 우선순위로 선택
+    date_col = None
+    for c in ["Date", "date"]:
+        if c in out.columns:
+            date_col = c
+            break
+
+    if date_col is None:
+        # 보통 reset_index 후 첫 컬럼이 날짜(index)임
+        date_col = out.columns[0]
+
+    # date 컬럼을 단일 Series로 만들어 'date'라는 이름으로 고정
+    out["date"] = pd.to_datetime(out[date_col], errors="coerce").dt.date
+
+    # 혹시 기존에 date/Date가 여러 개면 제거(중복 방지)
+    cols_to_drop = [c for c in ["Date", "date"] if c in out.columns and c != "date"]
+    # 위에서 out["date"]를 만들었기 때문에 기존 date_col이 "date"였다면 중복이 생길 수 있어 제거
+    for c in cols_to_drop:
+        if c != "date":
+            out = out.drop(columns=[c], errors="ignore")
+
+    out = out.dropna(subset=["date"])
+
     return out[["date", "benchmark_return"]]
 
 
