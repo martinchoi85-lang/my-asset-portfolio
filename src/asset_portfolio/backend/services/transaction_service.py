@@ -239,15 +239,17 @@ class TransactionService:
         supabase = get_supabase_client()
         rows = (
             supabase.table("assets")
-            .select("id")
-            .in_("asset_type", ["cash","deposit","fund"])           
+            .select("id, asset_type")
             .eq("currency", currency)
             .execute()
             .data or []
         )
-        if not rows:
+        cash_rows = [
+            row for row in rows if str(row.get("asset_type") or "").lower() == "cash"
+        ]
+        if not cash_rows:
             raise ValueError(f"cash asset not found for currency={currency}. assets.asset_type='cash' 확인")
-        return int(rows[0]["id"])
+        return int(cash_rows[0]["id"])
 
 
     @staticmethod
