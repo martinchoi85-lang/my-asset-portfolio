@@ -9,7 +9,8 @@ from asset_portfolio.dashboard.render import (
     render_asset_weight_section,
     render_asset_contribution_stacked_area, 
     render_portfolio_treemap,
-    render_transactions_table_section
+    render_transactions_table_section,
+    render_latest_snapshot_table,
 )
 from asset_portfolio.dashboard.transaction_editor import render_transaction_editor
 from asset_portfolio.dashboard.asset_editor import render_asset_editor
@@ -76,6 +77,8 @@ st.sidebar.caption(f"DEBUG date_range: {start_date} ~ {end_date}")
 tab1, tab2 = st.tabs(["Dashboard", "Transactions"])
 
 with tab1:
+    render_latest_snapshot_table(account_id)
+    st.divider()
     render_portfolio_return_section(account_id, start_date, end_date)
     st.divider()
     render_asset_return_section(account_id, start_date, end_date)

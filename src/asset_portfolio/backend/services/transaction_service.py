@@ -32,6 +32,12 @@ class CreateTransactionRequest:
 
 class TransactionService:
     @staticmethod
+    def _normalize_currency(currency: Optional[str]) -> Optional[str]:
+        if not currency:
+            return None
+        return str(currency).strip().upper()
+
+    @staticmethod
     def _iso_date(d: date) -> str:
         return d.isoformat()
 
@@ -226,7 +232,21 @@ class TransactionService:
         )
         if not row or not row.get("currency"):
             raise ValueError(f"assets.id={asset_id} currency not found")
-        return row["currency"]
+        return TransactionService._normalize_currency(row["currency"])
+
+    @staticmethod
+    def _get_account_currency(account_id: str) -> Optional[str]:
+        """✅ 계좌에 통화 컬럼이 있는 경우, 그 값을 우선 사용합니다."""
+        supabase = get_supabase_client()
+        resp = (
+            supabase.table("accounts")
+            .select("currency")
+            .eq("id", account_id)
+            .single()
+            .execute()
+        )
+        row = resp.data or {}
+        return TransactionService._normalize_currency(row.get("currency"))
 
 
     @staticmethod
@@ -237,15 +257,18 @@ class TransactionService:
         - CASH_KRW/CASH_USD를 수동으로 추가하셨으므로 여기서 자동 매칭됩니다.
         """
         supabase = get_supabase_client()
+        normalized_currency = TransactionService._normalize_currency(currency)
         rows = (
             supabase.table("assets")
-            .select("id, asset_type")
-            .eq("currency", currency)
+            .select("id, asset_type, currency")
             .execute()
             .data or []
         )
         cash_rows = [
-            row for row in rows if str(row.get("asset_type") or "").lower() == "cash"
+            row
+            for row in rows
+            if str(row.get("asset_type") or "").lower() == "cash"
+            and TransactionService._normalize_currency(row.get("currency")) == normalized_currency
         ]
         if not cash_rows:
             raise ValueError(f"cash asset not found for currency={currency}. assets.asset_type='cash' 확인")
@@ -273,8 +296,10 @@ class TransactionService:
 
         # ✅ auto_cash 옵션이 켜져 있고, BUY/SELL인 경우에만 현금 자동 반영
         if auto_cash and req.trade_type in {"BUY", "SELL"}:
+            account_ccy = TransactionService._get_account_currency(req.account_id)
             asset_ccy = TransactionService._get_asset_currency(req.asset_id)
-            cash_asset_id = TransactionService._get_cash_asset_id_by_currency(asset_ccy)
+            cash_currency = account_ccy or asset_ccy
+            cash_asset_id = TransactionService._get_cash_asset_id_by_currency(cash_currency)
 
             # ✅ 현금 변동액 산정: 매수=출금(매수대금+비용), 매도=입금(매도대금-비용)
             gross = req.quantity * req.price

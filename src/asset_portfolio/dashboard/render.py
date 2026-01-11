@@ -259,6 +259,155 @@ def load_accounts():
     return response.data or []
 
 
+def render_latest_snapshot_table(account_id: str):
+    st.subheader("🧾 최신 스냅샷 테이블")
+
+    if not account_id:
+        st.info("계좌를 선택해주세요.")
+        return
+
+    supabase = get_supabase_client()
+
+    latest_query = (
+        supabase.table("daily_snapshots")
+        .select("date")
+        .order("date", desc=True)
+        .limit(1)
+    )
+    if account_id != "__ALL__":
+        latest_query = latest_query.eq("account_id", account_id)
+
+    latest_row = latest_query.execute().data or []
+
+    if not latest_row:
+        st.info("daily_snapshots 데이터가 없습니다.")
+        return
+
+    latest_date = latest_row[0]["date"]
+
+    rows_query = (
+        supabase.table("daily_snapshots")
+        .select(
+            "date, quantity, purchase_price, valuation_price, valuation_amount, purchase_amount, currency, "
+            "assets (name_kr, asset_type), accounts (name)"
+        )
+        .eq("date", latest_date)
+    )
+    if account_id != "__ALL__":
+        rows_query = rows_query.eq("account_id", account_id)
+
+    rows = rows_query.execute().data or []
+
+    if not rows:
+        st.info("최신 스냅샷 데이터를 불러오지 못했습니다.")
+        return
+
+    df = pd.json_normalize(rows, sep=".")
+
+    df["profit_amount"] = df["valuation_amount"] - df["purchase_amount"]
+    df["profit_rate"] = df.apply(
+        lambda r: (r["profit_amount"] / r["purchase_amount"] * 100)
+        if float(r["purchase_amount"]) > 0
+        else 0.0,
+        axis=1,
+    )
+
+    # 사용자에게 보여줄 통화 표기를 한국어로 변환합니다.
+    # None/빈값은 그대로 두고, 소문자로 정규화해서 매핑합니다.
+    currency_map = {
+        "krw": "원화",
+        "usd": "달러",
+    }
+    df["currency"] = df["currency"].apply(
+        lambda x: currency_map.get(str(x).lower(), x) if x is not None else x
+    )
+
+    # 자산 타입 표기를 한국어로 변환합니다.
+    # 매핑되지 않은 타입은 원본 값을 유지합니다.
+    asset_type_map = {
+        "cash": "예수금",
+        "stock": "주식",
+        "deposit": "예적금",
+        "etf": "ETF",
+        "fund": "펀드류",
+        "tdf": "TDF",
+    }
+    df["assets.asset_type"] = df["assets.asset_type"].apply(
+        lambda x: asset_type_map.get(str(x).lower(), x) if x is not None else x
+    )
+
+    df = df.rename(
+        columns={
+            "accounts.name": "계좌명",
+            "assets.name_kr": "자산명",
+            "quantity": "수량",
+            "purchase_price": "매수단가",
+            "valuation_price": "현재단가",
+            "valuation_amount": "평가금액",
+            "profit_amount": "수익금액",
+            "profit_rate": "수익률",
+            "currency": "통화",
+            "assets.asset_type": "자산 타입",
+        }
+    )
+
+    columns = [
+        "계좌명",
+        "자산명",
+        "수량",
+        "매수단가",
+        "현재단가",
+        "평가금액",
+        "수익금액",
+        "수익률",
+        "통화",
+        "자산 타입",
+    ]
+
+    st.caption(f"기준일: {latest_date}")
+
+    display_df = df[columns].copy()
+
+    # 표시 전용 포맷을 지정합니다.
+    # - 수익률은 % 기호를 붙이고
+    # - 수량/가격/금액은 3자리마다 콤마를 넣습니다.
+    profit_amount_col = columns[6]
+    profit_rate_col = columns[7]
+    format_map = {
+        columns[2]: "{:,.2f}",
+        columns[3]: "{:,.2f}",
+        columns[4]: "{:,.2f}",
+        columns[5]: "{:,.0f}",
+        columns[6]: "{:,.0f}",
+        profit_rate_col: "{:.2f}%",
+    }
+
+    # 수익률 값의 부호에 따라 수익금액/수익률 컬럼의 글자색을 변경합니다.
+    # 양수면 빨간색, 음수면 파란색, 0은 기본색 유지.
+    profit_amount_idx = display_df.columns.get_loc(profit_amount_col)
+    profit_rate_idx = display_df.columns.get_loc(profit_rate_col)
+
+    def _profit_color(row):
+        rate = row[profit_rate_col]
+        if pd.isna(rate):
+            return [""] * len(row)
+        if rate > 0:
+            color = "color: red"
+        elif rate < 0:
+            color = "color: blue"
+        else:
+            color = ""
+        styles = [""] * len(row)
+        styles[profit_amount_idx] = color
+        styles[profit_rate_idx] = color
+        return styles
+
+    styled_df = display_df.style.format(format_map).apply(_profit_color, axis=1)
+
+    # Streamlit 경고에 맞춰 use_container_width 대신 width='stretch'를 사용합니다.
+    st.dataframe(styled_df, width="stretch")
+
+
 def render_account_selector():
     st.sidebar.subheader("🏦 계좌 선택")
 
