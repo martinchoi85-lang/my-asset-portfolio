@@ -118,6 +118,11 @@ def calculate_asset_contributions(
     if df.empty:
         return pd.DataFrame(columns=CONTRIBUTION_COLUMNS)
 
+    df = (
+        df.groupby(["date", "asset_id"], as_index=False)[["valuation_amount", "purchase_amount"]]
+        .sum()
+    )
+
     # =========================
     # date, asset_id 기준 정렬
     # =========================

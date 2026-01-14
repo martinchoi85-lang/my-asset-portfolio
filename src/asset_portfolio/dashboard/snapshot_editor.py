@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
+from asset_portfolio.backend.services.manual_cost_basis_service import record_cost_basis_events
 from asset_portfolio.dashboard.transaction_editor import _load_accounts_df, _load_assets_df
 
 MANUAL_TYPES = {"manual", "deposit", "bond", "pension"}
@@ -49,6 +50,20 @@ def _upsert_snapshots(rows: list[dict]) -> None:
         return
     supabase = get_supabase_client()
     supabase.table("daily_snapshots").upsert(rows).execute()
+
+
+def _upsert_asset_prices(rows: list[dict]) -> None:
+    """
+    수동자산 평가 입력 시점에 asset_prices도 함께 저장한다.
+    - price_date + asset_id 기준으로 업서트
+    """
+    if not rows:
+        return
+    supabase = get_supabase_client()
+    supabase.table("asset_prices").upsert(
+        rows,
+        on_conflict="price_date,asset_id",
+    ).execute()
 
 
 def render_snapshot_editor():
@@ -171,6 +186,9 @@ def render_snapshot_editor():
         for c in ["valuation_price", "purchase_price"]:
             base_df[c] = pd.to_numeric(base_df[c], errors="coerce").fillna(1.0)
 
+    # 원금 증감 입력 칼럼 (추가 납입/인출 용도)
+    base_df["원금 증감"] = 0.0
+
     # =========================
     # 4) 보기용 메타 조인: 계좌 라벨 + 자산 라벨
     # =========================
@@ -186,7 +204,7 @@ def render_snapshot_editor():
     base_df["평가금액"] = pd.to_numeric(base_df["valuation_amount"], errors="coerce").fillna(0.0)
 
     # 표시 컬럼(계좌가 반드시 보이도록)
-    view_cols = ["계좌", "name_kr", "ticker", "currency", "asset_type", "평가금액"]
+    view_cols = ["계좌", "name_kr", "ticker", "currency", "asset_type", "평가금액", "원금 증감"]
 
     st.caption("※ 수동평가 자산은 valuation_price=1로 고정하고, quantity=평가금액(원칙)을 사용합니다.")
     st.caption("※ 멀티 편집 모드에서는 같은 자산이라도 계좌별로 별도 행으로 표시됩니다.")
@@ -202,6 +220,7 @@ def render_snapshot_editor():
             "currency": st.column_config.TextColumn("통화", disabled=True),
             "asset_type": st.column_config.TextColumn("유형", disabled=True),
             "평가금액": st.column_config.NumberColumn("평가금액", min_value=0.0, step=1000.0),
+            "원금 증감": st.column_config.NumberColumn("원금 증감", step=1000.0),
         },
     )
 
@@ -214,6 +233,7 @@ def render_snapshot_editor():
         try:
             with st.spinner("스냅샷 저장 중..."):
                 save_rows = []
+                cost_basis_events = []
 
                 # edited는 account_id/asset_id가 없으므로 base_df의 동일 index를 이용해 매핑
                 for i, row in edited.iterrows():
@@ -221,6 +241,7 @@ def render_snapshot_editor():
                     asset_id = int(base_df.iloc[i]["asset_id"])
                     ccy = str(base_df.iloc[i].get("currency") or "").upper() or None
                     amt = float(row["평가금액"] or 0.0)
+                    delta = float(row["원금 증감"] or 0.0)
 
                     save_rows.append({
                         "date": snap_date.isoformat(),
@@ -234,7 +255,39 @@ def render_snapshot_editor():
                         "currency": ccy,
                     })
 
+                    if delta != 0:
+                        # 수동 자산의 추가 납입/인출은 cost basis 이벤트로 기록한다.
+                        cost_basis_events.append({
+                            "account_id": account_id,
+                            "asset_id": asset_id,
+                            "event_date": snap_date.isoformat(),
+                            "delta_amount": delta,
+                            "currency": ccy or "",
+                            "reason": "snapshot_editor",
+                            "memo": None,
+                        })
+
                 _upsert_snapshots(save_rows)
+                # 수동자산은 평가 입력 시점에만 가격 히스토리를 저장한다.
+                # 동일 자산이 여러 계좌에 있어도 가격은 동일하므로 자산 기준으로만 업서트한다.
+                price_rows = []
+                seen_assets = set()
+                for r in save_rows:
+                    if r["asset_id"] in seen_assets:
+                        continue
+                    seen_assets.add(r["asset_id"])
+                    price_rows.append({
+                        "price_date": r["date"],
+                        "asset_id": r["asset_id"],
+                        "close_price": r["valuation_price"],
+                        "currency": r.get("currency") or "",
+                        "source": "manual_snapshot",
+                        "fetched_at": None,
+                    })
+                _upsert_asset_prices(price_rows)
+                # 원금 증감 입력이 있으면 cost basis current까지 갱신한다.
+                if cost_basis_events:
+                    record_cost_basis_events(cost_basis_events)
 
             st.success("저장 완료. 대시보드에 즉시 반영됩니다.")
             st.cache_data.clear()

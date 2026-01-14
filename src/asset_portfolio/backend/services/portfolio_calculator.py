@@ -38,6 +38,56 @@ def _to_date(v) -> date:
     raise TypeError(f"Unsupported date type: {type(v)}")
 
 
+def _load_asset_price_history(asset_id: int, start_date: date, end_date: date):
+    """
+    자산 가격 히스토리를 날짜 범위로 로드한다.
+    - start_date 이전 1건을 추가로 가져와 as-of(과거 가격 이어붙이기) 용도로 사용
+    """
+    supabase = get_supabase_client()
+
+    # as-of 계산을 위해 start_date 이전 마지막 가격을 1건 가져온다.
+    prev_rows = (
+        supabase.table("asset_prices")
+        .select("price_date, close_price, source")
+        .eq("asset_id", asset_id)
+        .lte("price_date", start_date.isoformat())
+        .order("price_date", desc=True)
+        .limit(1)
+        .execute()
+        .data or []
+    )
+
+    # 지정 구간의 가격 히스토리 로드
+    rows = (
+        supabase.table("asset_prices")
+        .select("price_date, close_price, source")
+        .eq("asset_id", asset_id)
+        .gte("price_date", start_date.isoformat())
+        .lte("price_date", end_date.isoformat())
+        .order("price_date")
+        .execute()
+        .data or []
+    )
+
+    combined = []
+    if prev_rows:
+        combined.append(prev_rows[0])
+    combined.extend(rows)
+
+    # 날짜 중복이 있을 수 있어 마지막 값을 유지하도록 정리한다.
+    by_date = {}
+    for r in combined:
+        d = _to_date(r.get("price_date"))
+        p = float(r.get("close_price") or 0)
+        src = r.get("source")
+        by_date[d] = (p, src)
+
+    return sorted(
+        [(d, v[0], v[1]) for d, v in by_date.items()],
+        key=lambda x: x[0],
+    )
+
+
 def calculate_portfolio_state_at_date(account_id: str, target_date: date):
     """
     특정 계좌(account_id)에 대해
@@ -411,6 +461,11 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
     # - 주의: 이 값은 과거 날짜에도 동일하게 적용됩니다. (가격 히스토리 테이블 도입 전까지의 한계)
     current_price = float(asset_row.get("current_price") or 0)
 
+    # 가격 히스토리를 기반으로 날짜별 평가단가를 계산한다.
+    price_history = _load_asset_price_history(asset_id, start_date, end_date)
+    price_idx = 0
+    last_price = None
+
     # =========================
     # 3) 누적 상태 변수(기존과 동일)
     # =========================
@@ -422,11 +477,13 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
     tx_idx = 0
 
     while current_date <= end_date:
+        processed_tx_on_date = False
         # -------------------------
         # (A) 오늘까지의 거래 반영
         # -------------------------
         while tx_idx < len(transactions) and _to_date(transactions[tx_idx]["transaction_date"]) <= current_date:
             tx = transactions[tx_idx]
+            processed_tx_on_date = True
             trade_type = tx["trade_type"]
             qty = float(tx["quantity"])
             price = float(tx["price"])
@@ -468,6 +525,10 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
 
             tx_idx += 1
             
+        # 마지막 거래 이후에는 0-row를 더 이상 생성하지 않는다.
+        if tx_idx >= len(transactions) and current_qty <= 0 and not processed_tx_on_date:
+            break
+
         # =========================
         # 평균매입단가(purchase_price) 계산
         # =========================
@@ -475,6 +536,12 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
         purchase_price = 0.0
         if current_qty > 0:
             purchase_price = total_purchase_amount / current_qty
+
+        # 가격 히스토리 기준으로 현재 날짜까지의 마지막 가격을 찾는다.
+        if not is_cash and price_history:
+            while price_idx < len(price_history) and price_history[price_idx][0] <= current_date:
+                last_price = price_history[price_idx][1]
+                price_idx += 1
             
         # -------------------------
         # (B) 평가단가(valuation_price) 결정
@@ -483,10 +550,10 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
             # ✅ CASH는 단가 1 고정 (잔고를 quantity로 들고 가므로)
             valuation_price = 1.0
         else:
-            # ✅ 비현금 자산: current_price를 우선 사용
-            # ✅ 중요: 업데이트 실패로 current_price가 0/None이면,
-            #          valuation_price가 0이 되어 차트에서 자산이 빠질 수 있으므로 fallback 필요
-            if current_price is not None and float(current_price) > 0:
+            # 날짜별 가격이 있으면 우선 사용하고, 없으면 current_price를 fallback으로 사용
+            if last_price is not None and float(last_price) > 0:
+                valuation_price = float(last_price)
+            elif current_price is not None and float(current_price) > 0:
                 valuation_price = float(current_price)
             else:
                 # ✅ fallback: 평균매입단가로 평가(최소한 0이 되지 않게)

@@ -21,15 +21,59 @@ from asset_portfolio.backend.services.benchmark_service import (
     load_sp500_benchmark_series,
     align_portfolio_to_benchmark_calendar
 )
+from asset_portfolio.backend.services.manual_cost_basis_service import attach_manual_cost_basis
 from asset_portfolio.dashboard.data import load_assets_lookup
 from asset_portfolio.backend.infra.query import (
     build_daily_snapshots_query,
     load_asset_contribution_data
 )
 
-def render_portfolio_return_section(account_id: str, start_date: str, end_date: str):
+def render_kpi_section(account_id: str, start_date: str, end_date: str):
     st.subheader("📈 Portfolio 전체 수익률")
 
+    if not account_id:
+        st.info("계좌를 선택해주세요.")
+        return
+
+    # =========================
+    # 1) 포트폴리오 시계열
+    # =========================
+    portfolio_df = get_portfolio_return_series(account_id, start_date, end_date)
+
+    if portfolio_df.empty:
+        st.warning("조회된 데이터가 없습니다.")
+        return
+
+    # =========================
+    # 4) KPI 요약 카드
+    # =========================
+    # portfolio_return이 NaN인 경우가 있을 수 있으니, 마지막 유효값 기준으로 계산
+    pf_valid = portfolio_df.dropna(subset=["portfolio_return"]).copy()
+
+    if not pf_valid.empty:
+        last = pf_valid.sort_values("date").iloc[-1]
+        total_val = float(last["valuation_amount"])
+        total_buy = float(last["purchase_amount"])
+        pnl = total_val - total_buy
+        pnl_rate = (pnl / total_buy * 100) if total_buy > 0 else 0.0
+        portfolio_return_pct = float(last["portfolio_return"]) * 100
+    else:
+        total_val = float(portfolio_df["valuation_amount"].dropna().iloc[-1]) if portfolio_df["valuation_amount"].notna().any() else 0.0
+        total_buy = float(portfolio_df["purchase_amount"].dropna().iloc[-1]) if portfolio_df["purchase_amount"].notna().any() else 0.0
+        pnl = total_val - total_buy
+        pnl_rate = (pnl / total_buy * 100) if total_buy > 0 else 0.0
+        portfolio_return_pct = 0.0
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("평가금액", f"{total_val:,.0f} 원")
+    c2.metric("투자원금", f"{total_buy:,.0f} 원")
+    c3.metric("평가손익", f"{pnl:,.0f} 원", delta=f"{pnl_rate:.2f}%")
+    c4.metric("누적 수익률", f"{portfolio_return_pct:.2f}%")
+
+
+def render_benchmark_comparison_section(account_id: str, start_date: str, end_date: str):
+    st.subheader("🧾 벤치마크(S&P500)와 수익률 비교")
+    
     if not account_id:
         st.info("계좌를 선택해주세요.")
         return
@@ -58,34 +102,6 @@ def render_portfolio_return_section(account_id: str, start_date: str, end_date: 
         st.warning("벤치마크 데이터를 불러오지 못했습니다. (네트워크/외부 API 이슈 가능)")
 
     # =========================
-    # 4) KPI 요약 카드
-    # =========================
-    # portfolio_return이 NaN인 경우가 있을 수 있으니, 마지막 유효값 기준으로 계산
-    pf_valid = portfolio_df.dropna(subset=["portfolio_return"]).copy()
-
-    if not pf_valid.empty:
-        last = pf_valid.sort_values("date").iloc[-1]
-        total_val = float(last["valuation_amount"])
-        total_buy = float(last["purchase_amount"])
-        pnl = total_val - total_buy
-        pnl_rate = (pnl / total_buy * 100) if total_buy > 0 else 0.0
-        portfolio_return_pct = float(last["portfolio_return"]) * 100
-    else:
-        total_val = float(portfolio_df["valuation_amount"].dropna().iloc[-1]) if portfolio_df["valuation_amount"].notna().any() else 0.0
-        total_buy = float(portfolio_df["purchase_amount"].dropna().iloc[-1]) if portfolio_df["purchase_amount"].notna().any() else 0.0
-        pnl = total_val - total_buy
-        pnl_rate = (pnl / total_buy * 100) if total_buy > 0 else 0.0
-        portfolio_return_pct = 0.0
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("평가금액", f"{total_val:,.0f} 원")
-    c2.metric("투자원금", f"{total_buy:,.0f} 원")
-    c3.metric("평가손익", f"{pnl:,.0f} 원", delta=f"{pnl_rate:.2f}%")
-    c4.metric("누적 수익률", f"{portfolio_return_pct:.2f}%")
-
-    st.divider()
-
-    # =========================
     # 5) 차트 데이터 구성 (포트폴리오 vs 벤치마크)
     # =========================
     chart_df = portfolio_df[["date", "portfolio_return"]].copy()
@@ -109,17 +125,21 @@ def render_portfolio_return_section(account_id: str, start_date: str, end_date: 
     # =========================
     # 6) 라인 차트
     # =========================
+    chart_df = chart_df.rename(columns={
+        "portfolio_return_pct": "우리 포트폴리오 수익률(%)",
+        "benchmark_return_pct": "벤치마크(S&P500) 수익률(%)",
+        })
     st.line_chart(
         chart_df.set_index("date")[
-            [c for c in ["portfolio_return_pct", "benchmark_return_pct"] if c in chart_df.columns]
+            [c for c in ["우리 포트폴리오 수익률(%)", "벤치마크(S&P500) 수익률(%)"] if c in chart_df.columns]
         ],
         height=350,
     )
 
-    with st.expander("📄 원본 데이터 확인"):
-        st.dataframe(chart_df)
+    # with st.expander("📄 원본 데이터 확인"):
+    #     st.dataframe(chart_df)
 
-    st.caption("※ portfolio_return_pct는 선택한 기간의 포트폴리오 수익률(%)을 의미합니다. (기준일 대비 자산 가치가 얼마나 증가/감소했는지를 비율로 표시)")
+    st.caption("※ 우리 포트폴리오 수익률(%)은 선택한 기간의 포트폴리오 수익률(%)을 의미합니다. (기준일 대비 자산 가치가 얼마나 증가/감소했는지를 비율로 표시)")
 
     
 def render_asset_return_section(
@@ -288,8 +308,9 @@ def render_latest_snapshot_table(account_id: str):
     rows_query = (
         supabase.table("daily_snapshots")
         .select(
-            "date, quantity, purchase_price, valuation_price, valuation_amount, purchase_amount, currency, "
-            "assets (name_kr, asset_type), accounts (name)"
+            "date, account_id, asset_id, quantity, purchase_price, valuation_price, "
+            "valuation_amount, purchase_amount, currency, "
+            "assets (name_kr, asset_type, price_source), accounts (name)"
         )
         .eq("date", latest_date)
     )
@@ -304,10 +325,34 @@ def render_latest_snapshot_table(account_id: str):
 
     df = pd.json_normalize(rows, sep=".")
 
-    df["profit_amount"] = df["valuation_amount"] - df["purchase_amount"]
+    df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce")
+    df = df[df["quantity"].fillna(0) != 0]
+    if df.empty:
+        st.info("ìµœì‹  ?¤ëƒ…??ì— ?˜ëŸ‰ì´ 0???ì‚°???†ìŠµ?ˆë‹¤.")
+        return
+
+    # ✅ manual 자산 원금(cost basis) 정보 붙이기
+    # - manual 자산은 purchase_amount 대신 원금 기준으로 수익률을 계산한다.
+    # - non-manual은 기존 purchase_amount 기준을 유지한다.
+    df = attach_manual_cost_basis(df)
+
+    df["purchase_amount"] = pd.to_numeric(df["purchase_amount"], errors="coerce")
+    df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce")
+    if "manual_principal" in df.columns:
+        df["manual_principal"] = pd.to_numeric(df["manual_principal"], errors="coerce")
+
+    # ✅ 수익 계산 기준금액 결정
+    # 초보자 설명:
+    # - manual 자산: manual_principal(원금)
+    # - 그 외: purchase_amount(매수금액)
+    df["profit_base_amount"] = df["purchase_amount"]
+    manual_mask = df["assets.price_source"].fillna("").str.lower().str.strip().eq("manual")
+    df.loc[manual_mask, "profit_base_amount"] = df.loc[manual_mask, "manual_principal"]
+
+    df["profit_amount"] = df["valuation_amount"] - df["profit_base_amount"]
     df["profit_rate"] = df.apply(
-        lambda r: (r["profit_amount"] / r["purchase_amount"] * 100)
-        if float(r["purchase_amount"]) > 0
+        lambda r: (r["profit_amount"] / r["profit_base_amount"] * 100)
+        if float(r["profit_base_amount"] or 0) > 0
         else 0.0,
         axis=1,
     )
@@ -343,6 +388,7 @@ def render_latest_snapshot_table(account_id: str):
             "quantity": "수량",
             "purchase_price": "매수단가",
             "valuation_price": "현재단가",
+            "manual_principal": "원금(수동자산)",
             "valuation_amount": "평가금액",
             "profit_amount": "수익금액",
             "profit_rate": "수익률",
@@ -357,6 +403,7 @@ def render_latest_snapshot_table(account_id: str):
         "수량",
         "매수단가",
         "현재단가",
+        "원금(수동자산)",
         "평가금액",
         "수익금액",
         "수익률",
@@ -371,16 +418,32 @@ def render_latest_snapshot_table(account_id: str):
     # 표시 전용 포맷을 지정합니다.
     # - 수익률은 % 기호를 붙이고
     # - 수량/가격/금액은 3자리마다 콤마를 넣습니다.
-    profit_amount_col = columns[6]
-    profit_rate_col = columns[7]
+    profit_amount_col = columns[7]
+    profit_rate_col = columns[8]
+    def _format_quantity(value):
+        if pd.isna(value):
+            return ""
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return value
+        if num.is_integer():
+            return f"{num:,.0f}"
+        return f"{num:,.2f}"
+
     format_map = {
-        columns[2]: "{:,.2f}",
+        columns[2]: _format_quantity,
         columns[3]: "{:,.2f}",
         columns[4]: "{:,.2f}",
         columns[5]: "{:,.0f}",
         columns[6]: "{:,.0f}",
+        columns[7]: "{:,.0f}",
         profit_rate_col: "{:.2f}%",
     }
+
+    # Coerce numeric columns to avoid Styler format errors on None values.
+    for col in format_map:
+        display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
 
     # 수익률 값의 부호에 따라 수익금액/수익률 컬럼의 글자색을 변경합니다.
     # 양수면 빨간색, 음수면 파란색, 0은 기본색 유지.
@@ -437,46 +500,78 @@ def render_account_selector():
     return options[selected_label]
 
 
-def resolve_date_range(period: str):
+
+
+def _get_min_snapshot_date(account_id: str):
     """
-    기간 코드(1M, 3M, YTD, ALL)를
+    daily_snapshots의 최소 날짜를 조회한다.
+    - YTD 보정에 사용
+    """
+    supabase = get_supabase_client()
+    query = (
+        supabase.table("daily_snapshots")
+        .select("date")
+        .order("date", desc=False)
+        .limit(1)
+    )
+    if account_id and account_id != "__ALL__":
+        query = query.eq("account_id", account_id)
+
+    rows = query.execute().data or []
+    if not rows:
+        return None
+
+    return pd.to_datetime(rows[0]["date"], errors="coerce").date()
+
+def resolve_date_range(period: str, account_id: str):
+    """
+    기간 코드("오늘", "일주일", "한달", "3달(1분기)", "YTD(올해)", "ALL")를
     실제 조회용 start_date, end_date로 변환
     """
     end_date = date.today()
 
     if period == "오늘":
         start_date = end_date
-    elif period == "3일":
-        start_date = end_date - timedelta(days=3)
-    elif period == "1M":
+    elif period == "일주일":
+        start_date = end_date - timedelta(days=7)
+    elif period == "한달":
         start_date = end_date - timedelta(days=30)
-    elif period == "3M":
+    elif period == "3달(1분기)":
         start_date = end_date - timedelta(days=90)
-    elif period == "YTD":
+    elif period == "YTD(올해)":
         start_date = date(end_date.year, 1, 1)
     elif period == "ALL":
         start_date = None
     else:
         raise ValueError(f"Unknown period: {period}")
+        
+    # # 디버깅(차후 제거)
+    # print("start_date, end_date>>>>>>>>>>", start_date, end_date)
     
-    
-    # 디버깅(차후 제거)
-    print("start_date, end_date>>>>>>>>>>", start_date, end_date)
-    
+    # YTD 구간이 비는 경우, 실제 데이터 시작일로 보정한다.
+    note = None
+    if period == "YTD(올해)":
+        min_date = _get_min_snapshot_date(account_id)
+        if min_date and start_date and min_date > start_date:
+            start_date = min_date
+            note = f"YTD 구간에 데이터가 없어 시작일을 {min_date}로 보정했습니다."
 
-    return start_date, end_date
+    return start_date, end_date, note
 
 
-def render_period_selector():
+def render_period_selector(account_id: str):
     st.sidebar.subheader("📅 기간 선택")
 
     period = st.sidebar.radio(
         "조회 기간",
-        options=["오늘", "3일", "1M", "3M", "YTD", "ALL"],
-        index=0  # 기본값: 3M
+        options=["오늘", "일주일", "한달", "3달(1분기)", "YTD(올해)", "ALL"],
+        index=1  # 기본값: "일주일"
     )
 
-    return resolve_date_range(period)
+    start_date, end_date, note = resolve_date_range(period, account_id)
+    if note:
+        st.sidebar.caption(note)
+    return start_date, end_date
 
 
 

@@ -2,7 +2,8 @@
 import streamlit as st
 from asset_portfolio.dashboard.render import (
     render_asset_return_section, 
-    render_portfolio_return_section, 
+    render_kpi_section,
+    render_benchmark_comparison_section, 
     render_asset_contribution_section_full,
     render_account_selector, 
     render_period_selector, 
@@ -51,39 +52,41 @@ if page == "Snapshot Editor":
 # =========================
 # Main Dashboard 기존 로직
 # =========================
-st.title("📊 포트폴리오 수익률 대시보드")
+st.title("📊 승엽&민희 자산 포트폴리오")
 
 account_id = render_account_selector()
 
 if not account_id:
     st.stop()
     
-start_date, end_date = render_period_selector()
+start_date, end_date = render_period_selector(account_id)
 
 
 # --- 디버그: 단일 날짜 고정 모드 (원인 규명용) ---
-with st.sidebar.expander("🧪 디버그 옵션", expanded=False):
-    debug_single_day = st.checkbox("단일 날짜로 고정", value=False)
-    debug_day = st.date_input("조회 날짜", value=end_date)
+# with st.sidebar.expander("🧪 디버그 옵션", expanded=False):
+#     debug_single_day = st.checkbox("단일 날짜로 고정", value=False)
+#     debug_day = st.date_input("조회 날짜", value=end_date)
 
-if debug_single_day:
-    start_date = debug_day
-    end_date = debug_day
+# if debug_single_day:
+#     start_date = debug_day
+#     end_date = debug_day
 
-st.sidebar.caption(f"DEBUG date_range: {start_date} ~ {end_date}")
+# st.sidebar.caption(f"DEBUG date_range: {start_date} ~ {end_date}")
 # --- 디버그: 단일 날짜 고정 모드 (원인 규명용) 끝 ---
 
 
 tab1, tab2 = st.tabs(["Dashboard", "Transactions"])
 
 with tab1:
+    render_kpi_section(account_id, start_date, end_date)
+    st.divider()
     render_latest_snapshot_table(account_id)
     st.divider()
-    render_portfolio_return_section(account_id, start_date, end_date)
-    st.divider()
-    render_asset_return_section(account_id, start_date, end_date)
+    render_benchmark_comparison_section(account_id, start_date, end_date)
     st.divider()
     render_asset_contribution_section_full(account_id, start_date, end_date)
+    st.divider()
+    render_asset_return_section(account_id, start_date, end_date)
     st.divider()
     render_asset_weight_section(account_id, start_date, end_date)
     # st.divider()

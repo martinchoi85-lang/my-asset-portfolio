@@ -45,6 +45,55 @@ def _get_all_asset_ids_for_price_update() -> list[int]:
     return ids
 
 
+def _upsert_asset_prices_for_date(asset_ids: list[int], price_date: date) -> int:
+    """
+    자산 가격 히스토리를 당일 기준으로 저장한다.
+    - auto update 대상만 업서트 (manual/cash 등은 제외)
+    - price_date는 date 타입 그대로 사용
+    """
+    if not asset_ids:
+        return 0
+
+    supabase = get_supabase_client()
+    rows = (
+        supabase.table("assets")
+        .select("id, current_price, currency, asset_type, price_source")
+        .in_("id", [int(x) for x in asset_ids])
+        .execute()
+        .data or []
+    )
+
+    payload = []
+    for r in rows:
+        asset_type = (r.get("asset_type") or "").lower().strip()
+        price_source = (r.get("price_source") or "").lower().strip()
+        if asset_type in {"cash", "manual"} or price_source == "manual":
+            continue
+
+        current_price = r.get("current_price")
+        if current_price is None:
+            continue
+
+        payload.append({
+            "price_date": price_date.isoformat(),
+            "asset_id": int(r["id"]),
+            "close_price": float(current_price),
+            "currency": r.get("currency") or "",
+            "source": "yfinance",
+            "fetched_at": None,
+        })
+
+    if not payload:
+        return 0
+
+    supabase.table("asset_prices").upsert(
+        payload,
+        on_conflict="price_date,asset_id",
+    ).execute()
+
+    return len(payload)
+
+
 def main():
     # =========================
     # 1) Price update
@@ -64,6 +113,13 @@ def main():
             break
 
     # =========================
+    # 1-1) today price history upsert
+    # =========================
+    ok_asset_ids = [r.asset_id for r in results if r.ok]
+    inserted = _upsert_asset_prices_for_date(ok_asset_ids, date.today())
+    print(f"[JOB] asset_prices upserted: {inserted}")
+
+    # =========================
     # 2) Snapshot generation (today까지)
     # =========================
     account_ids = _get_all_account_ids()
@@ -74,8 +130,8 @@ def main():
     # 다만 시계열 차트를 위해 최소 30일을 권장합니다.
     # 아래는 안전하게 최근 60일로 생성하는 예시입니다.
     # 필요하면 30일로 줄이세요.
-    from datetime import timedelta
-    start_date = date.today() - timedelta(days=60)
+    # 과거 날짜를 매일 덮어쓰지 않도록 오늘 하루만 생성한다.
+    start_date = date.today()
     end_date = date.today()
 
     total_pairs = 0

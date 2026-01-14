@@ -296,9 +296,9 @@ class TransactionService:
 
         # ✅ auto_cash 옵션이 켜져 있고, BUY/SELL인 경우에만 현금 자동 반영
         if auto_cash and req.trade_type in {"BUY", "SELL"}:
-            account_ccy = TransactionService._get_account_currency(req.account_id)
+            # accounts 테이블에 currency가 없으므로 자산 통화를 기준으로 CASH를 선택한다.
             asset_ccy = TransactionService._get_asset_currency(req.asset_id)
-            cash_currency = account_ccy or asset_ccy
+            cash_currency = asset_ccy
             cash_asset_id = TransactionService._get_cash_asset_id_by_currency(cash_currency)
 
             # ✅ 현금 변동액 산정: 매수=출금(매수대금+비용), 매도=입금(매도대금-비용)
