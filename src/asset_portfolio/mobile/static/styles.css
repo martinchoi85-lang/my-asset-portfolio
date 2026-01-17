@@ -1,0 +1,150 @@
+:root {
+  color-scheme: light;
+  font-family: "Pretendard", "Noto Sans KR", system-ui, sans-serif;
+  background: #f6f7fb;
+  color: #1e1f25;
+}
+
+body {
+  margin: 0;
+  background: #f6f7fb;
+}
+
+.app {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 20px 16px 40px;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.header h1 {
+  font-size: 22px;
+  margin: 0;
+}
+
+.controls {
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 12px;
+  box-shadow: 0 6px 16px rgba(15, 16, 20, 0.08);
+  display: grid;
+  gap: 8px;
+}
+
+.controls label {
+  font-size: 12px;
+  color: #6b6f76;
+}
+
+.controls select,
+.controls input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #d6d9e0;
+  font-size: 14px;
+}
+
+.section {
+  margin-top: 18px;
+}
+
+.section h2 {
+  font-size: 17px;
+  margin-bottom: 10px;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.card {
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 12px;
+  box-shadow: 0 6px 16px rgba(15, 16, 20, 0.08);
+}
+
+.card .label {
+  font-size: 12px;
+  color: #6b6f76;
+}
+
+.card .value {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: #ffffff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 6px 16px rgba(15, 16, 20, 0.08);
+}
+
+.table th,
+.table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #eef0f4;
+  text-align: left;
+  vertical-align: top;
+}
+
+.table th {
+  background: #f0f2f8;
+  font-size: 12px;
+  color: #4b4f56;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: #edf1ff;
+  color: #2e4ed6;
+}
+
+.notice {
+  background: #fff7e6;
+  color: #9c6300;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.loading {
+  font-size: 14px;
+  color: #5a5f66;
+}
+
+.treemap {
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 6px 16px rgba(15, 16, 20, 0.08);
+  padding: 6px;
+}
+
+@media (max-width: 480px) {
+  .header h1 {
+    font-size: 20px;
+  }
+
+  .card .value {
+    font-size: 16px;
+  }
+}
