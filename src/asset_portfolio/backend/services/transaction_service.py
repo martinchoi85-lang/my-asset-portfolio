@@ -42,6 +42,20 @@ class TransactionService:
         return d.isoformat()
 
     @staticmethod
+    def _to_date(value: Any) -> date:
+        """
+        Supabase에서 내려오는 날짜 타입을 date로 통일한다.
+        - date/datetime/ISO 문자열을 모두 지원
+        """
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, str):
+            return datetime.fromisoformat(value).date()
+        raise ValueError(f"Unsupported date value: {value!r}")
+
+    @staticmethod
     def _chunk(rows: List[Dict[str, Any]], size: int = 500):
         for i in range(0, len(rows), size):
             yield rows[i:i + size]
@@ -276,6 +290,82 @@ class TransactionService:
 
 
     @staticmethod
+    def _build_cash_mirror_request(
+        req: CreateTransactionRequest,
+        *,
+        cash_asset_id: int,
+        memo_suffix: str,
+    ) -> CreateTransactionRequest:
+        """
+        BUY/SELL 거래를 CASH 입출금으로 미러링한다.
+        - BUY  -> WITHDRAW (매수금액 + 수수료/세금)
+        - SELL -> DEPOSIT  (매도금액 - 수수료/세금)
+        """
+        gross = req.quantity * req.price
+        fees = (req.fee or 0.0) + (req.tax or 0.0)
+
+        if req.trade_type == "BUY":
+            cash_trade_type = "WITHDRAW"
+            cash_amount = gross + fees
+        else:
+            cash_trade_type = "DEPOSIT"
+            cash_amount = max(0.0, gross - fees)
+
+        return CreateTransactionRequest(
+            account_id=req.account_id,
+            asset_id=cash_asset_id,
+            transaction_date=req.transaction_date,
+            trade_type=cash_trade_type,
+            quantity=float(cash_amount),
+            price=1.0,
+            fee=0.0,
+            tax=0.0,
+            memo=f"[AUTO] {req.trade_type} cash mirror {memo_suffix}",
+        )
+
+    @staticmethod
+    def _find_auto_cash_transactions(
+        *,
+        account_id: str,
+        cash_asset_id: int,
+        tx_date: date,
+    ) -> List[Dict[str, Any]]:
+        """
+        AUTO CASH 미러 거래를 찾는다.
+        - 조건: account_id + cash_asset_id + transaction_date + memo startswith '[AUTO]'
+        """
+        supabase = get_supabase_client()
+        rows = (
+            supabase.table("transactions")
+            .select("id, transaction_date, trade_type, quantity, price, fee, tax, memo")
+            .eq("account_id", account_id)
+            .eq("asset_id", cash_asset_id)
+            .eq("transaction_date", tx_date.isoformat())
+            .ilike("memo", "[AUTO]%")
+            .execute()
+            .data or []
+        )
+        return rows
+
+    @staticmethod
+    def get_transaction_by_id(tx_id: int) -> Dict[str, Any]:
+        supabase = get_supabase_client()
+        row = (
+            supabase.table("transactions")
+            .select(
+                "id, account_id, asset_id, transaction_date, trade_type, "
+                "quantity, price, fee, tax, memo"
+            )
+            .eq("id", tx_id)
+            .single()
+            .execute()
+            .data
+        )
+        if not row:
+            raise ValueError(f"transactions.id={tx_id} not found")
+        return row
+
+    @staticmethod
     def create_transaction_and_rebuild(req: CreateTransactionRequest, *, auto_cash: bool = True) -> Dict[str, Any]:
         """
         ✅ 거래 입력 단일 진입점(확장)
@@ -359,4 +449,174 @@ class TransactionService:
             "rebuilt_rows_cash": rebuilt_cash,
             "rebuilt_start_date": start.isoformat(),
             "rebuilt_end_date": end.isoformat(),
+        }
+
+    @staticmethod
+    def update_transaction_and_rebuild(
+        tx_id: int,
+        updated_req: CreateTransactionRequest,
+        *,
+        auto_cash: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        거래 수정 + 스냅샷 리빌드
+        - 기존 거래일/수정 거래일 중 더 빠른 날짜부터 리빌드한다.
+        - auto_cash=True면 기존 AUTO CASH 미러를 제거하고 재생성한다.
+        """
+        # 거래 유효성 검증을 먼저 수행해 잘못된 업데이트를 막는다.
+        TransactionService.validate_request(updated_req)
+
+        supabase = get_supabase_client()
+        original = TransactionService.get_transaction_by_id(tx_id)
+
+        original_date = TransactionService._to_date(original["transaction_date"])
+        updated_date = updated_req.transaction_date
+
+        payload = {
+            "account_id": updated_req.account_id,
+            "asset_id": updated_req.asset_id,
+            "transaction_date": updated_req.transaction_date.isoformat(),
+            "trade_type": updated_req.trade_type,
+            "quantity": updated_req.quantity,
+            "price": updated_req.price,
+            "fee": updated_req.fee,
+            "tax": updated_req.tax,
+            "memo": updated_req.memo,
+        }
+
+        # 1) 본 거래 업데이트
+        supabase.table("transactions").update(payload).eq("id", tx_id).execute()
+
+        removed_cash_ids: List[int] = []
+        cash_asset_ids: List[int] = []
+        created_cash_tx: Optional[Dict[str, Any]] = None
+
+        if auto_cash:
+            # 2) 기존 AUTO CASH 미러 제거(가능한 경우에만)
+            if original["trade_type"] in {"BUY", "SELL"}:
+                original_cash_asset_id = TransactionService._get_cash_asset_id_by_currency(
+                    TransactionService._get_asset_currency(int(original["asset_id"]))
+                )
+                cash_asset_ids.append(original_cash_asset_id)
+                auto_rows = TransactionService._find_auto_cash_transactions(
+                    account_id=original["account_id"],
+                    cash_asset_id=original_cash_asset_id,
+                    tx_date=original_date,
+                )
+                if len(auto_rows) == 1:
+                    supabase.table("transactions").delete().eq("id", auto_rows[0]["id"]).execute()
+                    removed_cash_ids.append(int(auto_rows[0]["id"]))
+
+            # 3) 수정된 거래 기준 AUTO CASH 미러 생성
+            if updated_req.trade_type in {"BUY", "SELL"}:
+                updated_cash_asset_id = TransactionService._get_cash_asset_id_by_currency(
+                    TransactionService._get_asset_currency(updated_req.asset_id)
+                )
+                cash_asset_ids.append(updated_cash_asset_id)
+                cash_req = TransactionService._build_cash_mirror_request(
+                    updated_req,
+                    cash_asset_id=updated_cash_asset_id,
+                    memo_suffix=f"(source_tx_id={tx_id})",
+                )
+                created_cash_tx = TransactionService.create_transaction(cash_req)
+
+        # 4) 리빌드 범위: 기존/수정 거래일 중 빠른 날짜 ~ 오늘
+        rebuild_start = min(original_date, updated_date)
+        rebuild_end = date.today()
+
+        # 자산 변경 가능성을 고려해 양쪽 모두 리빌드
+        asset_ids = {int(original["asset_id"]), int(updated_req.asset_id)}
+        rebuilt_main = 0
+        for aid in asset_ids:
+            rebuilt_main += TransactionService.rebuild_daily_snapshots_for_asset(
+                account_id=updated_req.account_id,
+                asset_id=aid,
+                start_date=rebuild_start,
+                end_date=rebuild_end,
+                delete_first=True,
+            )
+
+        rebuilt_cash = 0
+        for cash_asset_id in set(cash_asset_ids):
+            rebuilt_cash += TransactionService.rebuild_daily_snapshots_for_asset(
+                account_id=updated_req.account_id,
+                asset_id=cash_asset_id,
+                start_date=rebuild_start,
+                end_date=rebuild_end,
+                delete_first=True,
+            )
+
+        return {
+            "transaction_id": tx_id,
+            "removed_cash_ids": removed_cash_ids,
+            "created_cash_transaction": created_cash_tx,
+            "rebuilt_rows_main": rebuilt_main,
+            "rebuilt_rows_cash": rebuilt_cash,
+            "rebuilt_start_date": rebuild_start.isoformat(),
+            "rebuilt_end_date": rebuild_end.isoformat(),
+        }
+
+    @staticmethod
+    def delete_transaction_and_rebuild(
+        tx_id: int,
+        *,
+        auto_cash: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        거래 삭제 + 스냅샷 리빌드
+        - 삭제된 거래일 ~ 오늘 범위를 리빌드한다.
+        - auto_cash=True면 AUTO CASH 미러도 같이 삭제를 시도한다.
+        """
+        supabase = get_supabase_client()
+        original = TransactionService.get_transaction_by_id(tx_id)
+        original_date = TransactionService._to_date(original["transaction_date"])
+
+        # 1) 본 거래 삭제
+        supabase.table("transactions").delete().eq("id", tx_id).execute()
+
+        removed_cash_ids: List[int] = []
+        cash_asset_ids: List[int] = []
+
+        if auto_cash and original["trade_type"] in {"BUY", "SELL"}:
+            original_cash_asset_id = TransactionService._get_cash_asset_id_by_currency(
+                TransactionService._get_asset_currency(int(original["asset_id"]))
+            )
+            cash_asset_ids.append(original_cash_asset_id)
+            auto_rows = TransactionService._find_auto_cash_transactions(
+                account_id=original["account_id"],
+                cash_asset_id=original_cash_asset_id,
+                tx_date=original_date,
+            )
+            if len(auto_rows) == 1:
+                supabase.table("transactions").delete().eq("id", auto_rows[0]["id"]).execute()
+                removed_cash_ids.append(int(auto_rows[0]["id"]))
+
+        rebuild_start = original_date
+        rebuild_end = date.today()
+
+        rebuilt_main = TransactionService.rebuild_daily_snapshots_for_asset(
+            account_id=original["account_id"],
+            asset_id=int(original["asset_id"]),
+            start_date=rebuild_start,
+            end_date=rebuild_end,
+            delete_first=True,
+        )
+
+        rebuilt_cash = 0
+        for cash_asset_id in set(cash_asset_ids):
+            rebuilt_cash += TransactionService.rebuild_daily_snapshots_for_asset(
+                account_id=original["account_id"],
+                asset_id=cash_asset_id,
+                start_date=rebuild_start,
+                end_date=rebuild_end,
+                delete_first=True,
+            )
+
+        return {
+            "deleted_transaction_id": tx_id,
+            "removed_cash_ids": removed_cash_ids,
+            "rebuilt_rows_main": rebuilt_main,
+            "rebuilt_rows_cash": rebuilt_cash,
+            "rebuilt_start_date": rebuild_start.isoformat(),
+            "rebuilt_end_date": rebuild_end.isoformat(),
         }

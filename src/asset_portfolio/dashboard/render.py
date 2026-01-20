@@ -2,6 +2,8 @@ import pandas as pd
 import altair as alt
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import date, timedelta
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
 from asset_portfolio.backend.services.portfolio_weight_service import (
@@ -22,6 +24,10 @@ from asset_portfolio.backend.services.benchmark_service import (
     align_portfolio_to_benchmark_calendar
 )
 from asset_portfolio.backend.services.manual_cost_basis_service import attach_manual_cost_basis
+from asset_portfolio.backend.services.transaction_service import (
+    TransactionService,
+    CreateTransactionRequest,
+)
 from asset_portfolio.dashboard.data import load_assets_lookup
 from asset_portfolio.backend.infra.query import (
     build_daily_snapshots_query,
@@ -72,50 +78,45 @@ def render_kpi_section(account_id: str, start_date: str, end_date: str):
 
 
 def render_benchmark_comparison_section(account_id: str, start_date: str, end_date: str):
-    st.subheader("🧾 벤치마크(S&P500)와 수익률 비교")
-    
+    st.subheader("벤치마크(S&P500)와 수익률 비교")
+
     if not account_id:
-        st.info("계좌를 선택해주세요.")
+        st.info("계좌를 선택해 주세요.")
         return
 
     # =========================
-    # 1) 포트폴리오 시계열
+    # 1) 포트폴리오 수익률
     # =========================
     portfolio_df = get_portfolio_return_series(account_id, start_date, end_date)
 
     if portfolio_df.empty:
-        st.warning("조회된 데이터가 없습니다.")
+        st.warning("조회 가능한 데이터가 없습니다.")
         return
 
     # =========================
-    # 2) 벤치마크 시계열 (S&P 500)
-    #    - 반환: date, benchmark_return (0~1)
+    # 2) 벤치마크 수익률 (S&P 500)
     # =========================
     benchmark_df = load_sp500_benchmark_series(start_date=start_date, end_date=end_date)
 
     # =========================
-    # 3) forward-fill 정렬 (벤치마크 캘린더 기준)
+    # 3) 벤치마크 캘린더에 맞춰 forward-fill
     # =========================
     if not benchmark_df.empty:
         portfolio_df = align_portfolio_to_benchmark_calendar(portfolio_df, benchmark_df)
     else:
-        st.warning("벤치마크 데이터를 불러오지 못했습니다. (네트워크/외부 API 이슈 가능)")
+        st.warning("벤치마크 데이터를 불러오지 못했습니다. (네트워크/API 이슈 가능)")
 
     # =========================
-    # 5) 차트 데이터 구성 (포트폴리오 vs 벤치마크)
+    # 4) 차트 데이터 준비
     # =========================
     chart_df = portfolio_df[["date", "portfolio_return"]].copy()
-
-    # ✅ datetime → date로 변환해서 시간 표시를 제거합니다.
     chart_df["date"] = pd.to_datetime(chart_df["date"]).dt.date
-
     chart_df["portfolio_return_pct"] = chart_df["portfolio_return"] * 100
 
     if not benchmark_df.empty:
         b = benchmark_df.copy()
         b["date"] = pd.to_datetime(b["date"]).dt.date
         b["benchmark_return_pct"] = b["benchmark_return"] * 100
-
         chart_df = chart_df.merge(
             b[["date", "benchmark_return_pct"]],
             on="date",
@@ -123,25 +124,46 @@ def render_benchmark_comparison_section(account_id: str, start_date: str, end_da
         )
 
     # =========================
-    # 6) 라인 차트
+    # 5) 이중 Y축 라인 차트 (좌: 포트폴리오, 우: 벤치마크)
     # =========================
-    chart_df = chart_df.rename(columns={
-        "portfolio_return_pct": "우리 포트폴리오 수익률(%)",
-        "benchmark_return_pct": "벤치마크(S&P500) 수익률(%)",
-        })
-    st.line_chart(
-        chart_df.set_index("date")[
-            [c for c in ["우리 포트폴리오 수익률(%)", "벤치마크(S&P500) 수익률(%)"] if c in chart_df.columns]
-        ],
-        height=350,
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig.add_trace(
+        go.Scatter(
+            x=chart_df["date"],
+            y=chart_df["portfolio_return_pct"],
+            name="포트폴리오 수익률(%)",
+            mode="lines",
+        ),
+        secondary_y=False,
     )
 
-    # with st.expander("📄 원본 데이터 확인"):
-    #     st.dataframe(chart_df)
+    if "benchmark_return_pct" in chart_df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=chart_df["date"],
+                y=chart_df["benchmark_return_pct"],
+                name="벤치마크(S&P500) 수익률(%)",
+                mode="lines",
+            ),
+            secondary_y=True,
+        )
 
-    st.caption("※ 우리 포트폴리오 수익률(%)은 선택한 기간의 포트폴리오 수익률(%)을 의미합니다. (기준일 대비 자산 가치가 얼마나 증가/감소했는지를 비율로 표시)")
+    fig.update_layout(
+        height=350,
+        margin=dict(t=10, l=10, r=10, b=10),
+        legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="left", x=0),
+    )
+    fig.update_yaxes(title_text="포트폴리오 수익률(%)", secondary_y=False)
+    fig.update_yaxes(title_text="벤치마크(S&P500) 수익률(%)", secondary_y=True)
 
-    
+    st.plotly_chart(fig, width="stretch")
+    st.caption(
+        "※ 우리 포트폴리오 수익률(%)은 선택한 기간의 포트폴리오 누적 수익률을 의미합니다. "
+        "(기준일 대비 자산 가치가 어느 정도 증가/감소했는지를 비율로 표시)"
+    )
+
+
 def render_asset_return_section(
     account_id: str,
     start_date: str,
@@ -1097,13 +1119,15 @@ def render_asset_contribution_section_full(
 
 
 def render_transactions_table_section(account_id: str, start_date: str, end_date: str):
-    st.subheader("🧾 Transactions")
+    st.subheader("거래 내역")
 
     supabase = get_supabase_client()
     query = (
         supabase.table("transactions")
         .select("""
             id,
+            account_id,
+            asset_id,
             transaction_date,
             trade_type,
             quantity,
@@ -1114,12 +1138,10 @@ def render_transactions_table_section(account_id: str, start_date: str, end_date
             assets ( ticker, name_kr, currency ),
             accounts ( name, brokerage, owner, type )
         """)
-        # .gte("transaction_date", f"{start_date}T00:00:00")
-        # .lte("transaction_date", f"{end_date}T23:59:59")
         .order("transaction_date", desc=True)
     )
 
-    # ✅ ALL이 아닌 경우에만 계좌 필터 적용
+    # ALL이 아닌 경우에만 계좌 필터 적용
     if account_id and account_id != "__ALL__":
         query = query.eq("account_id", account_id)
 
@@ -1137,21 +1159,41 @@ def render_transactions_table_section(account_id: str, start_date: str, end_date
         return
 
     df = pd.DataFrame(rows)
+    df_raw = df.copy()
 
-    # ✅ accounts 컬럼이 dict(JSON)로 들어오면, name만 뽑아서 표시하기
+    # 수정/삭제 UI용 라벨 계산 (표시용 컬럼은 원본과 분리)
+    if "accounts" not in df_raw.columns:
+        df_raw["accounts"] = None
+    if "assets" not in df_raw.columns:
+        df_raw["assets"] = None
+
+    trade_type_kr_map = {
+        "BUY": "매수",
+        "SELL": "매도",
+        "DEPOSIT": "입금",
+        "WITHDRAW": "출금",
+    }
+    df_raw["transaction_date"] = pd.to_datetime(df_raw["transaction_date"]).dt.date
+    df_raw["trade_type_kr"] = df_raw["trade_type"].map(trade_type_kr_map).fillna(df_raw["trade_type"])
+    df_raw["asset_label"] = df_raw["assets"].apply(
+        lambda x: f"{(x or {}).get('ticker', '')} | {(x or {}).get('name_kr', '')}".strip(" |")
+    )
+    df_raw["account_label"] = df_raw["accounts"].apply(
+        lambda x: f"{(x or {}).get('brokerage', '')} | {(x or {}).get('name', '')} ({(x or {}).get('owner', '')})".strip(" |")
+    )
+
+    # accounts 컬럼이 dict(JSON)로 내려오면 name만 추출해 표시
     if "accounts" in df.columns:
         df["account_name"] = df["accounts"].apply(
-            lambda x: (x or {}).get("name")  # accounts가 None일 수 있으니 방어
+            lambda x: (x or {}).get("name")
         )
-        # 원본 accounts dict 컬럼은 화면에서 숨김
         df = df.drop(columns=["accounts"], errors="ignore")
 
-    # ✅ id 컬럼 숨기기(transactions의 PK를 화면에 굳이 보여줄 필요가 없으면 drop)
+    # id 컬럼 숨기기
     df = df.drop(columns=["id"], errors="ignore")
 
     # =========================
-    # ✅ 컬럼명을 한글로 표시하기 위한 맵핑 테이블
-    # - 실제 df에 존재하는 컬럼만 rename됩니다.
+    # 컬럼명 표시용 매핑
     # =========================
     COL_KR = {
         "transaction_date": "거래일",
@@ -1160,7 +1202,7 @@ def render_transactions_table_section(account_id: str, start_date: str, end_date
         "name_kr": "종목명",
         "asset_currency": "통화",
         "quantity": "수량/금액",
-        "price": "단가",
+        "price": "가격",
         "fee": "수수료",
         "tax": "세금",
         "memo": "메모",
@@ -1177,23 +1219,115 @@ def render_transactions_table_section(account_id: str, start_date: str, end_date
     df["transaction_date"] = pd.to_datetime(df["transaction_date"]).dt.date
     df["asset_currency"] = df["assets"].apply(lambda x: (x or {}).get("currency"))
 
-    # ✅ 표시는 한글이지만, 내부 로직/코드는 영문 컬럼을 계속 써도 됩니다.
     df_display = df.rename(columns=COL_KR)
 
-    # (선택) 표시 컬럼 순서를 한글 기준으로 정렬하고 싶으면:
     display_order = [
         "거래일", "거래구분", "티커", "종목명", "통화",
-        "수량/금액", "단가", "수수료", "세금", "계좌", "메모"
+        "수량/금액", "가격", "수수료", "세금", "계좌", "메모"
     ]
 
     cols = [c for c in display_order if c in df_display.columns] + [c for c in df_display.columns if c not in display_order]
     df_display = df_display[cols]
 
-    # join된 dict 펼치기(간단)
-    # df["ticker"] = df["assets"].apply(lambda x: (x or {}).get("ticker"))
-    # df["name_kr"] = df["assets"].apply(lambda x: (x or {}).get("name_kr"))
-    # df["asset_currency"] = df["assets"].apply(lambda x: (x or {}).get("currency"))
-    # df = df.drop(columns=["assets"], errors="ignore")
+    st.dataframe(df_display, width="stretch")
 
-    # st.dataframe(df, width='stretch')
-    st.dataframe(df_display, width='stretch')
+    with st.expander("✏️ 거래 수정/삭제"):
+        tx_rows = df_raw.sort_values("transaction_date", ascending=False).to_dict("records")
+        if not tx_rows:
+            st.info("수정/삭제할 거래가 없습니다.")
+            return
+
+        tx_label_map = {
+            r["id"]: f"{r['transaction_date']} | {r['asset_label']} | {r['trade_type_kr']} | qty={r['quantity']} | price={r['price']} | id={r['id']}"
+            for r in tx_rows
+        }
+
+        selected_tx_id = st.selectbox(
+            "수정/삭제할 거래 선택",
+            options=[r["id"] for r in tx_rows],
+            format_func=lambda tid: tx_label_map.get(tid, str(tid)),
+        )
+
+        selected = next(r for r in tx_rows if r["id"] == selected_tx_id)
+
+        st.caption(f"계좌: {selected.get('account_label', '')}")
+        st.caption(f"자산: {selected.get('asset_label', '')}")
+
+        trade_type_options = ["BUY", "SELL", "DEPOSIT", "WITHDRAW"]
+        trade_type_labels = {
+            "BUY": "매수",
+            "SELL": "매도",
+            "DEPOSIT": "입금",
+            "WITHDRAW": "출금",
+        }
+        trade_type = st.selectbox(
+            "거래 구분",
+            options=trade_type_options,
+            index=trade_type_options.index(selected["trade_type"]),
+            format_func=lambda v: trade_type_labels.get(v, v),
+        )
+
+        tx_date = st.date_input("거래일", value=selected["transaction_date"])
+        quantity = st.number_input("수량/금액", min_value=0.0, value=float(selected["quantity"] or 0.0), step=1.0)
+
+        if trade_type in {"DEPOSIT", "WITHDRAW"}:
+            price = 1.0
+            st.number_input("가격", min_value=0.0, value=1.0, step=1.0, disabled=True)
+        else:
+            price = st.number_input("가격", min_value=0.0, value=float(selected["price"] or 0.0), step=1.0)
+
+        fee = st.number_input("수수료", min_value=0.0, value=float(selected.get("fee") or 0.0), step=1.0)
+        tax = st.number_input("세금", min_value=0.0, value=float(selected.get("tax") or 0.0), step=1.0)
+        memo = st.text_input("메모", value=selected.get("memo") or "")
+
+        auto_cash = st.checkbox("BUY/SELL 자동 CASH 거래도 함께 조정", value=True)
+
+        col_u, col_d = st.columns(2)
+        with col_u:
+            update_clicked = st.button("거래 수정 반영", type="primary")
+        with col_d:
+            delete_clicked = st.button("거래 삭제", type="secondary")
+
+        if update_clicked:
+            try:
+                req = CreateTransactionRequest(
+                    account_id=str(selected["account_id"]),
+                    asset_id=int(selected["asset_id"]),
+                    transaction_date=tx_date,
+                    trade_type=str(trade_type),
+                    quantity=float(quantity),
+                    price=float(price),
+                    fee=float(fee),
+                    tax=float(tax),
+                    memo=memo if memo else None,
+                )
+                with st.spinner("거래 수정 및 스냅샷 리빌드 중..."):
+                    result = TransactionService.update_transaction_and_rebuild(
+                        int(selected_tx_id),
+                        req,
+                        auto_cash=auto_cash,
+                    )
+                st.success(
+                    f"수정 완료. (리빌드: {result['rebuilt_start_date']} ~ {result['rebuilt_end_date']})"
+                )
+                st.cache_data.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"수정 실패: {e}")
+
+        if delete_clicked:
+            try:
+                with st.spinner("거래 삭제 및 스냅샷 리빌드 중..."):
+                    result = TransactionService.delete_transaction_and_rebuild(
+                        int(selected_tx_id),
+                        auto_cash=auto_cash,
+                    )
+                st.success(
+                    f"삭제 완료. (리빌드: {result['rebuilt_start_date']} ~ {result['rebuilt_end_date']})"
+                )
+                st.cache_data.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"삭제 실패: {e}")
+
+

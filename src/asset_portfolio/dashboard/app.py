@@ -1,5 +1,7 @@
 # src/asset_portfolio/dashboard/app.py
+import os
 import streamlit as st
+import streamlit.components.v1 as components
 from asset_portfolio.dashboard.render import (
     render_asset_return_section, 
     render_kpi_section,
@@ -17,21 +19,52 @@ from asset_portfolio.dashboard.transaction_editor import render_transaction_edit
 from asset_portfolio.dashboard.asset_editor import render_asset_editor
 from asset_portfolio.dashboard.price_updater import render_price_updater
 from asset_portfolio.dashboard.snapshot_editor import render_snapshot_editor
+from asset_portfolio.dashboard.recurring_order_editor import render_recurring_order_editor
 
 st.set_page_config(
     page_title="Asset Portfolio Dashboard",
     layout="wide"
 )
 
+
+def _inject_mobile_redirect():
+    mobile_url = os.environ.get("MOBILE_URL")
+    if not mobile_url:
+        return
+
+    html = """
+        <script>
+        (function() {{
+          const ua = (navigator.userAgent || "").toLowerCase();
+          const isMobile = /iphone|android|ipad|ipod|mobile|opera mini|blackberry|iemobile/.test(ua);
+          if (!isMobile) return;
+
+          // 디버깅/예외 처리를 위해 no_mobile_redirect=1 이면 리다이렉트하지 않는다.
+          if (window.location.search.includes("no_mobile_redirect=1")) return;
+
+          const base = "{mobile_url}".replace(/\\/$/, "");
+          const target = base + "/?from=streamlit";
+          window.location.replace(target);
+        }})();
+        </script>
+        """.format(mobile_url=mobile_url)
+    components.html(html, height=0)
+
+_inject_mobile_redirect()
+
 # 페이지 전환
 page = st.sidebar.radio(
     "화면 선택",
-    ["Main Dashboard", "Transaction Editor", "Price Updater", "Asset Editor", "Snapshot Editor"],
+    ["Main Dashboard", "Transaction Editor", "Recurring Orders", "Price Updater", "Asset Editor", "Snapshot Editor"],
     index=0,
 )
 
 if page == "Transaction Editor":
     render_transaction_editor()
+    st.stop()
+
+if page == "Recurring Orders":
+    render_recurring_order_editor()
     st.stop()
 
 
