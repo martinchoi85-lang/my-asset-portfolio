@@ -136,7 +136,7 @@ def render_recurring_order_editor():
         .select(
             "id, account_id, asset_id, trade_type, frequency, day_of_month, day_of_week, "
             "timezone, quantity, price, amount, currency, start_date, end_date, active, memo, "
-            "created_at, updated_at, assets (ticker, name_kr)"
+            "created_at, updated_at"
         )
         .eq("account_id", account_id)
         .order("created_at", desc=True)
@@ -149,9 +149,8 @@ def render_recurring_order_editor():
         return
 
     df_orders = pd.DataFrame(existing_rows)
-    df_orders["asset_label"] = df_orders["assets"].apply(
-        lambda x: f"{(x or {}).get('ticker', '')} | {(x or {}).get('name_kr', '')}".strip(" |")
-    )
+    asset_label_map = dict(zip(assets_df["id"], assets_df["label"]))
+    df_orders["asset_label"] = df_orders["asset_id"].map(asset_label_map).fillna("")
     st.dataframe(
         df_orders[[
             "id", "asset_label", "frequency", "day_of_month", "day_of_week",

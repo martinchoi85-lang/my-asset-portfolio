@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
 from asset_portfolio.backend.services.transaction_service import TransactionService
 from asset_portfolio.backend.services.daily_snapshot_generator import generate_daily_snapshots
+from asset_portfolio.backend.services.krx_price_fetcher import KRXPriceFetcher
 
 
 @dataclass
@@ -290,6 +291,178 @@ class PriceUpdaterService:
                 )
 
         return results
+
+    # =========================
+    # ✅ KRX price source helpers
+    # =========================
+    @staticmethod
+    def _load_price_sources(asset_ids: list[int]) -> Dict[int, list[Dict[str, Any]]]:
+        """
+        ✅ asset_price_sources 테이블에서 price source 설정을 읽어옵니다.
+        - asset_id별로 우선순위(priority) 기반으로 정렬하여 저장합니다.
+        - 설정이 없는 자산은 빈 리스트로 처리합니다.
+        """
+        if not asset_ids:
+            return {}
+
+        supabase = get_supabase_client()
+        rows = (
+            supabase.table("asset_price_sources")
+            .select("asset_id, source_type, priority, source_params, active")
+            .in_("asset_id", [int(x) for x in asset_ids])
+            .execute()
+            .data or []
+        )
+
+        mapping: Dict[int, list[Dict[str, Any]]] = {}
+        for r in rows:
+            if not r.get("active", True):
+                continue
+            aid = int(r["asset_id"])
+            mapping.setdefault(aid, []).append(r)
+
+        for aid in mapping:
+            mapping[aid].sort(key=lambda x: int(x.get("priority") or 0))
+
+        return mapping
+
+    @staticmethod
+    def _fetch_price_from_sources(
+        *,
+        asset_row: Dict[str, Any],
+        source_rows: list[Dict[str, Any]],
+    ) -> Tuple[Optional[float], Optional[str], Optional[str]]:
+        """
+        ✅ price source 우선순위에 따라 가격을 조회합니다.
+        - 현재 단계에서는 KRX만 지원
+        - 향후 yfinance, paid API 등 확장 가능
+        """
+        if not source_rows:
+            return None, None, "price source 설정 없음"
+
+        for src in source_rows:
+            source_type = (src.get("source_type") or "").lower().strip()
+            params = src.get("source_params") or {}
+
+            # Future: add new source_type handlers here for deposit/savings/fund crawling,
+            # and map those assets to asset_price_sources with the right params.
+            if source_type == "krx":
+                # ✅ KRX 가격 조회
+                result = KRXPriceFetcher.fetch_reference_price(
+                    code=str(params.get("code") or asset_row.get("ticker") or ""),
+                    source_params=params,
+                )
+                if result.price is not None:
+                    return result.price, "krx", f"used_trade_date={result.used_trade_date}"
+                # 실패 시 다음 소스로 넘어감
+                continue
+
+        return None, None, "모든 price source 실패"
+
+    @staticmethod
+    def _carry_forward_last_price(
+        asset_id: int,
+        price_date: date,
+    ) -> Optional[float]:
+        """
+        ✅ 가격 조회 실패 시 가장 최근 가격을 가져와 당일 가격으로 사용합니다.
+        - 실패하더라도 일자별 시계열을 끊지 않기 위한 정책
+        """
+        supabase = get_supabase_client()
+        rows = (
+            supabase.table("asset_prices")
+            .select("price_date, close_price")
+            .eq("asset_id", asset_id)
+            .lte("price_date", price_date.isoformat())
+            .order("price_date", desc=True)
+            .limit(1)
+            .execute()
+            .data or []
+        )
+        if not rows:
+            return None
+        return float(rows[0].get("close_price") or 0) or None
+
+    @staticmethod
+    def update_asset_prices_for_date(
+        *,
+        asset_ids: list[int],
+        price_date: date,
+        carry_forward_on_fail: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        ✅ price source 기반으로 asset_prices 테이블을 갱신합니다.
+        - 주로 KRX 기반 가격을 저장하는 목적
+        - 실패 시 carry-forward 정책을 선택적으로 적용
+        """
+        if not asset_ids:
+            return {"inserted": 0, "failed": 0}
+
+        supabase = get_supabase_client()
+        assets = (
+            supabase.table("assets")
+            .select("id, ticker, currency, asset_type, price_source, market")
+            .in_("id", [int(x) for x in asset_ids])
+            .execute()
+            .data or []
+        )
+        if not assets:
+            return {"inserted": 0, "failed": 0}
+
+        source_map = PriceUpdaterService._load_price_sources([a["id"] for a in assets])
+
+        payload = []
+        failed = 0
+
+        for row in assets:
+            asset_type = (row.get("asset_type") or "").lower().strip()
+            if asset_type == "cash":
+                continue
+
+            aid = int(row["id"])
+            sources = source_map.get(aid, [])
+
+            # ✅ price source 우선순위를 돌면서 가능한 가격을 찾습니다.
+            # - 현재는 KRX만 지원하지만, 나중에 yfinance/유료 API가 추가될 수 있습니다.
+            price, used_source, reason = PriceUpdaterService._fetch_price_from_sources(
+                asset_row=row,
+                source_rows=sources,
+            )
+
+            if price is None and carry_forward_on_fail:
+                # ✅ 오늘 가격이 없으면 "가장 최근 가격"으로 보간합니다.
+                # - 시계열이 끊기는 것을 막기 위한 안정성 정책입니다.
+                price = PriceUpdaterService._carry_forward_last_price(aid, price_date)
+                if price is not None:
+                    used_source = "carry_forward"
+                    reason = "fallback to last price"
+
+            if price is None:
+                failed += 1
+                # ✅ 실패는 로그만 남기고 job을 중단하지 않습니다.
+                supabase.table("assets").update({
+                    "price_updated_at": datetime.now(timezone.utc).isoformat(),
+                    "price_update_status": "failed",
+                    "price_update_error": (str(reason)[:300] if reason else "unknown error"),
+                }).eq("id", aid).execute()
+                continue
+
+            payload.append({
+                "price_date": price_date.isoformat(),
+                "asset_id": aid,
+                "close_price": float(price),
+                "currency": row.get("currency") or "",
+                "source": used_source or "krx",
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+        if payload:
+            supabase.table("asset_prices").upsert(
+                payload,
+                on_conflict="price_date,asset_id",
+            ).execute()
+
+        return {"inserted": len(payload), "failed": failed}
 
     
     @staticmethod

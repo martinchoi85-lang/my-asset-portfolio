@@ -1,12 +1,14 @@
+from datetime import date
 import streamlit as st
 import pandas as pd
 
 from asset_portfolio.dashboard.transaction_editor import _load_assets_df
+from asset_portfolio.backend.infra.supabase_client import get_supabase_client
 from asset_portfolio.backend.services.price_updater_service import PriceUpdaterService
 
         
 def render_price_updater():
-    st.title("💹 Price Updater (yfinance)")
+    st.title("💹 Price Updater (yfinance + krx)")
 
     # ✅ 실행 중 플래그
     if "price_busy" not in st.session_state:
@@ -58,6 +60,7 @@ def render_price_updater():
         selected_ids = [int(x) for x in df["id"].tolist()]
 
     auto_rebuild = st.checkbox("가격 업데이트 후 스냅샷 자동 리빌드", value=True)
+    include_krx = st.checkbox("KRX price source도 함께 업데이트", value=True)
 
     run_clicked = st.button("가격 업데이트 실행", type="primary", disabled=(len(selected_ids) == 0))
 
@@ -67,6 +70,21 @@ def render_price_updater():
         try:
             with st.spinner("가격 업데이트 중..."):
                 results = PriceUpdaterService.update_many(selected_ids)
+
+            source_asset_ids = []
+            if include_krx:
+                supabase = get_supabase_client()
+                rows = (
+                    supabase.table("asset_price_sources")
+                    .select("asset_id")
+                    .eq("active", True)
+                    .execute()
+                    .data or []
+                )
+                source_asset_ids = sorted({int(r["asset_id"]) for r in rows if r.get("asset_id") is not None})
+                if mode == "선택한 자산만":
+                    selected_set = set(selected_ids)
+                    source_asset_ids = [aid for aid in source_asset_ids if aid in selected_set]
 
             # ✅ 결과표: old_price/new_price 기준으로 표시(기존 'price' rename 버그 수정)
             res_df = pd.DataFrame([r.__dict__ for r in results]).rename(columns={
@@ -91,6 +109,21 @@ def render_price_updater():
                         st.warning("일부 계좌 리빌드 실패: " + " | ".join(summary["errors"][:3]))
 
                     st.success(f"스냅샷 리빌드 완료: 총 {rebuilt_rows}행 (대상 {rebuilt_pairs} 조합)")
+
+            if include_krx and source_asset_ids:
+                with st.spinner("KRX price source 업데이트 중..."):
+                    # Future sources (deposit/fund/crawling) should be handled by adding
+                    # new source_type branches in PriceUpdaterService._fetch_price_from_sources.
+                    source_result = PriceUpdaterService.update_asset_prices_for_date(
+                        asset_ids=source_asset_ids,
+                        price_date=date.today(),
+                        carry_forward_on_fail=True,
+                    )
+                st.info(
+                    "KRX price source 업데이트: "
+                    f"inserted={source_result.get('inserted')}, "
+                    f"failed={source_result.get('failed')}"
+                )
 
             st.cache_data.clear()
             st.success("완료되었습니다. (실패 종목은 사유/스테일 상태를 확인하세요)")

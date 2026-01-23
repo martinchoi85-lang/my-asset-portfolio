@@ -94,6 +94,22 @@ def _upsert_asset_prices_for_date(asset_ids: list[int], price_date: date) -> int
     return len(payload)
 
 
+def _get_asset_ids_for_price_sources() -> list[int]:
+    """
+    ✅ asset_price_sources에 등록된 자산 목록을 조회합니다.
+    - KRX 등 외부 소스로 가격을 수집할 대상
+    """
+    supabase = get_supabase_client()
+    rows = (
+        supabase.table("asset_price_sources")
+        .select("asset_id")
+        .eq("active", True)
+        .execute()
+        .data or []
+    )
+    return sorted({int(r["asset_id"]) for r in rows if r.get("asset_id") is not None})
+
+
 def main():
     # =========================
     # 1) Price update
@@ -113,11 +129,26 @@ def main():
             break
 
     # =========================
-    # 1-1) today price history upsert
+    # 1-1) today price history upsert (yfinance 대상)
     # =========================
     ok_asset_ids = [r.asset_id for r in results if r.ok]
     inserted = _upsert_asset_prices_for_date(ok_asset_ids, date.today())
-    print(f"[JOB] asset_prices upserted: {inserted}")
+    print(f"[JOB] asset_prices upserted (yfinance): {inserted}")
+
+    # =========================
+    # 1-2) price source 기반(KRX 등) price history upsert
+    # =========================
+    source_asset_ids = _get_asset_ids_for_price_sources()
+    if source_asset_ids:
+        source_result = PriceUpdaterService.update_asset_prices_for_date(
+            asset_ids=source_asset_ids,
+            price_date=date.today(),
+            carry_forward_on_fail=True,
+        )
+        print(
+            "[JOB] asset_prices upserted (price_sources): "
+            f"inserted={source_result.get('inserted')}, failed={source_result.get('failed')}"
+        )
 
     # =========================
     # 2) Snapshot generation (today까지)
