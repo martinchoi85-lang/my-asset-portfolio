@@ -46,7 +46,7 @@ def render_price_updater():
     if only_stale:
         df = df[df["is_stale"] == True]
 
-    st.caption("yfinance로 current_price를 갱신합니다. 실패해도 기존가 유지 + 실패 사유/시각을 기록합니다.")
+    st.caption("yfinance 및 krx에서 현재 가격(current_price)을 갱신합니다. 실패해도 기존가 유지 + 실패 사유/시각을 기록합니다.")
 
     mode = st.radio("업데이트 방식", ["선택한 자산만", "표에 보이는 전체"], index=0)
 
@@ -71,6 +71,9 @@ def render_price_updater():
             with st.spinner("가격 업데이트 중..."):
                 results = PriceUpdaterService.update_many(selected_ids)
 
+            asset_name_map = df.set_index("id")["name_kr"].to_dict()
+            krx_detail_map = {}
+
             source_asset_ids = []
             if include_krx:
                 supabase = get_supabase_client()
@@ -85,17 +88,6 @@ def render_price_updater():
                 if mode == "선택한 자산만":
                     selected_set = set(selected_ids)
                     source_asset_ids = [aid for aid in source_asset_ids if aid in selected_set]
-
-            # ✅ 결과표: old_price/new_price 기준으로 표시(기존 'price' rename 버그 수정)
-            res_df = pd.DataFrame([r.__dict__ for r in results]).rename(columns={
-                "asset_id": "자산ID",
-                "ticker": "티커",
-                "ok": "성공여부",
-                "old_price": "기존가",
-                "new_price": "신규가",
-                "reason": "비고/실패사유",
-            })
-            st.dataframe(res_df, width="stretch")
 
             ok_asset_ids = [int(r.asset_id) for r in results if r.ok]
 
@@ -119,11 +111,46 @@ def render_price_updater():
                         price_date=date.today(),
                         carry_forward_on_fail=True,
                     )
+                details = source_result.get("details") or []
+                for d in details:
+                    aid = d.get("asset_id")
+                    if aid is None:
+                        continue
+                    ok = bool(d.get("ok"))
+                    source = d.get("source") or "krx"
+                    reason = d.get("reason")
+                    status = "ok" if ok else "failed"
+                    note = f"krx:{status}({source})"
+                    if reason:
+                        note = f"{note} {reason}"
+                    krx_detail_map[int(aid)] = note
                 st.info(
                     "KRX price source 업데이트: "
                     f"inserted={source_result.get('inserted')}, "
                     f"failed={source_result.get('failed')}"
                 )
+
+            res_df = pd.DataFrame([r.__dict__ for r in results])
+            if not res_df.empty:
+                res_df["asset_name"] = res_df["asset_id"].map(asset_name_map)
+                if krx_detail_map:
+                    res_df["reason"] = res_df["reason"].fillna("")
+                    res_df["reason"] = res_df.apply(
+                        lambda r: (f"{r['reason']} | {krx_detail_map[int(r['asset_id'])]}"
+                                   if krx_detail_map.get(int(r["asset_id"]))
+                                   else r["reason"]),
+                        axis=1,
+                    )
+            res_df = res_df.rename(columns={
+                "asset_id": "asset_id",
+                "asset_name": "asset_name",
+                "ticker": "ticker",
+                "ok": "ok",
+                "old_price": "old_price",
+                "new_price": "new_price",
+                "reason": "reason",
+            })
+            st.dataframe(res_df, width="stretch")
 
             st.cache_data.clear()
             st.success("완료되었습니다. (실패 종목은 사유/스테일 상태를 확인하세요)")

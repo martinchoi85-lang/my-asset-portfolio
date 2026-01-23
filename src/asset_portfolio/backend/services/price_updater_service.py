@@ -101,7 +101,7 @@ class PriceUpdaterService:
         """
         ✅ yfinance ticker 후보 생성
         - 미국: 보통 그대로
-        - 한국: 숫자 6자리면 .KS / .KQ를 시도(코스피/코스닥 구분이 불명확하면 둘 다 시도)
+        - 한국: 6자리(숫자/문자혼합)면 .KS / .KQ를 시도(코스피/코스닥 구분이 불명확하면 둘 다 시도)
         - 이미 접미사가 있으면 그대로 사용
         """
         t = (ticker or "").strip()
@@ -114,8 +114,8 @@ class PriceUpdaterService:
 
         m = (market or "").lower()
 
-        # 한국 시장 추정: tickers like '213630'
-        if m in {"korea", "kr", "kor"} and t.isdigit() and len(t) == 6:
+        # 한국 시장 추정: tickers like '213630' or '0064K0'
+        if m in {"korea", "kr", "kor"} and len(t) == 6 and t.isalnum():
             return [f"{t}.KS", f"{t}.KQ", t]  # ✅ 둘 다 시도 + 원본도 fallback
         return [t]
 
@@ -340,6 +340,7 @@ class PriceUpdaterService:
         if not source_rows:
             return None, None, "price source 설정 없음"
 
+        last_reason = None
         for src in source_rows:
             source_type = (src.get("source_type") or "").lower().strip()
             params = src.get("source_params") or {}
@@ -354,10 +355,21 @@ class PriceUpdaterService:
                 )
                 if result.price is not None:
                     return result.price, "krx", f"used_trade_date={result.used_trade_date}"
+                if result.reason:
+                    last_reason = result.reason
+                # KRX 실패 시, 문자혼합 코드(yfinance 지원) fallback
+                ticker = str(asset_row.get("ticker") or "")
+                market = asset_row.get("market")
+                if ticker and any(ch.isalpha() for ch in ticker):
+                    yf_price, yf_used, yf_reason = PriceUpdaterService.fetch_price_from_yfinance(ticker, market)
+                    if yf_price is not None:
+                        return yf_price, "yfinance", f"fallback_from_krx used={yf_used}"
+                    if yf_reason:
+                        last_reason = yf_reason
                 # 실패 시 다음 소스로 넘어감
                 continue
 
-        return None, None, "모든 price source 실패"
+        return None, None, last_reason or "모든 price source 실패"
 
     @staticmethod
     def _carry_forward_last_price(
@@ -413,10 +425,17 @@ class PriceUpdaterService:
 
         payload = []
         failed = 0
+        details: list[Dict[str, Any]] = []
 
         for row in assets:
             asset_type = (row.get("asset_type") or "").lower().strip()
             if asset_type == "cash":
+                details.append({
+                    "asset_id": int(row["id"]),
+                    "ok": False,
+                    "source": None,
+                    "reason": "skipped cash",
+                })
                 continue
 
             aid = int(row["id"])
@@ -445,6 +464,12 @@ class PriceUpdaterService:
                     "price_update_status": "failed",
                     "price_update_error": (str(reason)[:300] if reason else "unknown error"),
                 }).eq("id", aid).execute()
+                details.append({
+                    "asset_id": aid,
+                    "ok": False,
+                    "source": used_source,
+                    "reason": reason,
+                })
                 continue
 
             payload.append({
@@ -455,6 +480,12 @@ class PriceUpdaterService:
                 "source": used_source or "krx",
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
             })
+            details.append({
+                "asset_id": aid,
+                "ok": True,
+                "source": used_source or "krx",
+                "reason": reason,
+            })
 
         if payload:
             supabase.table("asset_prices").upsert(
@@ -462,7 +493,7 @@ class PriceUpdaterService:
                 on_conflict="price_date,asset_id",
             ).execute()
 
-        return {"inserted": len(payload), "failed": failed}
+        return {"inserted": len(payload), "failed": failed, "details": details}
 
     
     @staticmethod

@@ -442,6 +442,7 @@ def render_latest_snapshot_table(account_id: str):
     # - 수량/가격/금액은 3자리마다 콤마를 넣습니다.
     profit_amount_col = columns[7]
     profit_rate_col = columns[8]
+    asset_name_col = columns[1]
     def _format_quantity(value):
         if pd.isna(value):
             return ""
@@ -471,6 +472,7 @@ def render_latest_snapshot_table(account_id: str):
     # 양수면 빨간색, 음수면 파란색, 0은 기본색 유지.
     profit_amount_idx = display_df.columns.get_loc(profit_amount_col)
     profit_rate_idx = display_df.columns.get_loc(profit_rate_col)
+    asset_name_idx = display_df.columns.get_loc(asset_name_col)
 
     def _profit_color(row):
         rate = row[profit_rate_col]
@@ -483,6 +485,7 @@ def render_latest_snapshot_table(account_id: str):
         else:
             color = ""
         styles = [""] * len(row)
+        styles[asset_name_idx] = color
         styles[profit_amount_idx] = color
         styles[profit_rate_idx] = color
         return styles
