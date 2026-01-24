@@ -16,6 +16,7 @@ from asset_portfolio.dashboard.render import (
     render_latest_snapshot_table,
 )
 from asset_portfolio.dashboard.transaction_editor import render_transaction_editor
+from asset_portfolio.dashboard.transaction_importer import render_transaction_importer
 from asset_portfolio.dashboard.asset_editor import render_asset_editor
 from asset_portfolio.dashboard.price_updater import render_price_updater
 from asset_portfolio.dashboard.snapshot_editor import render_snapshot_editor
@@ -55,31 +56,35 @@ _inject_mobile_redirect()
 # 페이지 전환
 page = st.sidebar.radio(
     "화면 선택",
-    ["Main Dashboard", "Transaction Editor", "Recurring Orders", "Price Updater", "Asset Editor", "Snapshot Editor"],
+    ["자산 종합/분석", "거래내역 수정", "정기매수 관리", "자산가격 업데이트", "자산 정보 수정", "스냅샷 수정", "Transaction Importer"],
     index=0,
 )
 
-if page == "Transaction Editor":
+if page == "거래내역 수정":
     render_transaction_editor()
     st.stop()
 
-if page == "Recurring Orders":
+if page == "정기매수 관리":
     render_recurring_order_editor()
-    st.stop()
+    st.stop()   
 
 
-if page == "Price Updater":
+if page == "자산가격 업데이트":
     render_price_updater()
     st.stop()
 
 
-if page == "Asset Editor":
+if page == "자산 정보 수정":
     render_asset_editor()
     st.stop()
 
 
-if page == "Snapshot Editor":
+if page == "스냅샷 수정":
     render_snapshot_editor()
+    st.stop()
+
+if page == "Transaction Importer":
+    render_transaction_importer()
     st.stop()
 
 # =========================

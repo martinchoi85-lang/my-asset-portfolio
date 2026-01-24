@@ -96,7 +96,20 @@ def render_benchmark_comparison_section(account_id: str, start_date: str, end_da
     # =========================
     # 2) 벤치마크 수익률 (S&P 500)
     # =========================
-    benchmark_df = load_sp500_benchmark_series(start_date=start_date, end_date=end_date)
+    benchmark_start = start_date
+    benchmark_end = end_date
+    if benchmark_start is None or benchmark_end is None:
+        portfolio_dates = pd.to_datetime(portfolio_df["date"], errors="coerce").dropna()
+        if not portfolio_dates.empty:
+            benchmark_start = portfolio_dates.min().date()
+            benchmark_end = portfolio_dates.max().date()
+
+    benchmark_df = pd.DataFrame()
+    if benchmark_start is not None and benchmark_end is not None:
+        benchmark_df = load_sp500_benchmark_series(
+            start_date=benchmark_start,
+            end_date=benchmark_end,
+        )
 
     # =========================
     # 3) 벤치마크 캘린더에 맞춰 forward-fill
@@ -567,6 +580,7 @@ def resolve_date_range(period: str, account_id: str):
         start_date = date(end_date.year, 1, 1)
     elif period == "ALL":
         start_date = None
+        end_date = None
     else:
         raise ValueError(f"Unknown period: {period}")
         
@@ -1192,8 +1206,21 @@ def render_transactions_table_section(account_id: str, start_date: str, end_date
         )
         df = df.drop(columns=["accounts"], errors="ignore")
 
-    # id 컬럼 숨기기
-    df = df.drop(columns=["id"], errors="ignore")
+    # assets dict에서 표시용 컬럼 추출
+    df["ticker"] = df["assets"].apply(lambda x: (x or {}).get("ticker"))
+    df["asset_name"] = df["assets"].apply(lambda x: (x or {}).get("name_kr"))
+    df["asset_currency"] = df["assets"].apply(lambda x: (x or {}).get("currency"))
+
+    currency_map = {
+        "krw": "원",
+        "usd": "달러",
+    }
+    df["asset_currency"] = df["asset_currency"].apply(
+        lambda x: currency_map.get(str(x).lower(), x) if x is not None else x
+    )
+
+    # id/내부키/원본 dict 컬럼 숨기기
+    df = df.drop(columns=["id", "account_id", "asset_id", "assets"], errors="ignore")
 
     # =========================
     # 컬럼명 표시용 매핑
@@ -1202,7 +1229,7 @@ def render_transactions_table_section(account_id: str, start_date: str, end_date
         "transaction_date": "거래일",
         "trade_type": "거래구분",
         "ticker": "티커",
-        "name_kr": "종목명",
+        "asset_name": "자산명",
         "asset_currency": "통화",
         "quantity": "수량/금액",
         "price": "가격",
@@ -1220,12 +1247,11 @@ def render_transactions_table_section(account_id: str, start_date: str, end_date
 
     df["trade_type"] = df["trade_type"].map(TRADE_TYPE_KR).fillna(df["trade_type"])
     df["transaction_date"] = pd.to_datetime(df["transaction_date"]).dt.date
-    df["asset_currency"] = df["assets"].apply(lambda x: (x or {}).get("currency"))
 
     df_display = df.rename(columns=COL_KR)
 
     display_order = [
-        "거래일", "거래구분", "티커", "종목명", "통화",
+        "거래일", "거래구분", "티커", "자산명", "통화",
         "수량/금액", "가격", "수수료", "세금", "계좌", "메모"
     ]
 
