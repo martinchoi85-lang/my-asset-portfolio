@@ -59,8 +59,12 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.get("/")
 async def root(request: Request):
     """모바일 접속이면 React 페이지, 아니면 Streamlit으로 이동합니다."""
+    force_desktop = request.query_params.get("force_desktop") == "1"
     force_mobile = request.query_params.get("force_mobile") == "1"
     user_agent = request.headers.get("user-agent", "")
+
+    if force_desktop:
+        return RedirectResponse(_get_streamlit_url())
 
     if force_mobile or _is_mobile_user_agent(user_agent):
         return HTMLResponse(_read_index_html())

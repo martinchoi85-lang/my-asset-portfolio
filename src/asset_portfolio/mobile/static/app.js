@@ -235,6 +235,15 @@ const App = () => {
   return (
     <div className="app">
       <div className="header">
+        <button
+          className="toggle-button"
+          onClick={() => {
+            window.location.href = "/?force_desktop=1";
+          }}
+          type="button"
+        >
+          📊
+        </button>
         <h1>📱 모바일 포트폴리오 요약</h1>
         <p className="badge">모바일 전용 요약 화면</p>
       </div>

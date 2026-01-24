@@ -90,7 +90,18 @@ if page == "Transaction Importer":
 # =========================
 # Main Dashboard 기존 로직
 # =========================
-st.title("📊 승엽&민희 자산 포트폴리오")
+mobile_url = os.environ.get("MOBILE_URL")
+title_cols = st.columns([0.05, 0.95], vertical_alignment="center")
+with title_cols[0]:
+    if st.button("📊", help="모바일 페이지로 전환", disabled=not mobile_url):
+        target = f"{mobile_url.rstrip('/')}/?from=streamlit"
+        components.html(
+            f"<script>window.location.replace('{target}');</script>",
+            height=0,
+        )
+        st.stop()
+with title_cols[1]:
+    st.title("승엽&민희 자산 포트폴리오")
 
 account_id = render_account_selector()
 
@@ -98,20 +109,6 @@ if not account_id:
     st.stop()
     
 start_date, end_date = render_period_selector(account_id)
-
-
-# --- 디버그: 단일 날짜 고정 모드 (원인 규명용) ---
-# with st.sidebar.expander("🧪 디버그 옵션", expanded=False):
-#     debug_single_day = st.checkbox("단일 날짜로 고정", value=False)
-#     debug_day = st.date_input("조회 날짜", value=end_date)
-
-# if debug_single_day:
-#     start_date = debug_day
-#     end_date = debug_day
-
-# st.sidebar.caption(f"DEBUG date_range: {start_date} ~ {end_date}")
-# --- 디버그: 단일 날짜 고정 모드 (원인 규명용) 끝 ---
-
 
 tab1, tab2 = st.tabs(["Dashboard", "Transactions"])
 
