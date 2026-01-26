@@ -21,6 +21,7 @@ portfolio_service.py
 """
 
 def get_asset_return_series(
+    user_id: str,
     asset_id: int,
     account_id: str,
     start_date: str,
@@ -38,6 +39,7 @@ def get_asset_return_series(
         select_cols="date, purchase_amount, valuation_amount",
         start_date=start_date,
         end_date=end_date,
+        user_id=user_id,
         account_id=account_id,
     )
 
@@ -49,6 +51,7 @@ def get_asset_return_series(
 
 
 def load_portfolio_daily_snapshots(
+    user_id: str,
     account_id: str,
     start_date: str,
     end_date: str,
@@ -61,6 +64,7 @@ def load_portfolio_daily_snapshots(
         select_cols="date, purchase_amount, valuation_amount",
         start_date=start_date,
         end_date=end_date,
+        user_id=user_id,
         account_id=account_id,
     )
 
@@ -83,21 +87,16 @@ def load_portfolio_daily_snapshots(
         daily_map[d]["valuation_amount"] += float(r["valuation_amount"] or 0)
         daily_map[d]["purchase_amount"] += float(r["purchase_amount"] or 0)
 
-    # return sorted(
-    #     daily_map.values(),
-    #     key=lambda x: x["date"]
-    # )
-    # date 순서 정렬 안정화
     result = list(daily_map.values())
     result.sort(key=lambda x: x["date"])
     return result
 
 
-def get_portfolio_return_series(account_id: str, start_date: str, end_date: str) -> pd.DataFrame:
+def get_portfolio_return_series(user_id: str, account_id: str, start_date: str, end_date: str) -> pd.DataFrame:
     """
     Streamlit / API에서 사용하는 최종 함수
     """
-    snapshots = load_portfolio_daily_snapshots(account_id, start_date, end_date)
+    snapshots = load_portfolio_daily_snapshots(user_id, account_id, start_date, end_date)
     return calculate_portfolio_return_series_from_snapshots(snapshots)
 
 

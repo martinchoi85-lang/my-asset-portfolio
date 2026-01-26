@@ -28,13 +28,11 @@ from asset_portfolio.backend.services.transaction_service import (
     TransactionService,
     CreateTransactionRequest,
 )
+from asset_portfolio.backend.infra import query
 from asset_portfolio.dashboard.data import load_assets_lookup
-from asset_portfolio.backend.infra.query import (
-    build_daily_snapshots_query,
-    load_asset_contribution_data
-)
 
-def render_kpi_section(account_id: str, start_date: str, end_date: str):
+
+def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date: str):
     st.subheader("📈 Portfolio 전체 수익률")
 
     if not account_id:
@@ -44,7 +42,7 @@ def render_kpi_section(account_id: str, start_date: str, end_date: str):
     # =========================
     # 1) 포트폴리오 시계열
     # =========================
-    portfolio_df = get_portfolio_return_series(account_id, start_date, end_date)
+    portfolio_df = get_portfolio_return_series(user_id, account_id, start_date, end_date)
 
     if portfolio_df.empty:
         st.warning("조회된 데이터가 없습니다.")
@@ -77,7 +75,7 @@ def render_kpi_section(account_id: str, start_date: str, end_date: str):
     c4.metric("누적 수익률", f"{portfolio_return_pct:.2f}%")
 
 
-def render_benchmark_comparison_section(account_id: str, start_date: str, end_date: str):
+def render_benchmark_comparison_section(user_id: str, account_id: str, start_date: str, end_date: str):
     st.subheader("벤치마크(S&P500)와 수익률 비교")
 
     if not account_id:
@@ -87,7 +85,7 @@ def render_benchmark_comparison_section(account_id: str, start_date: str, end_da
     # =========================
     # 1) 포트폴리오 수익률
     # =========================
-    portfolio_df = get_portfolio_return_series(account_id, start_date, end_date)
+    portfolio_df = get_portfolio_return_series(user_id, account_id, start_date, end_date)
 
     if portfolio_df.empty:
         st.warning("조회 가능한 데이터가 없습니다.")
@@ -170,7 +168,7 @@ def render_benchmark_comparison_section(account_id: str, start_date: str, end_da
     fig.update_yaxes(title_text="포트폴리오 수익률(%)", secondary_y=False)
     fig.update_yaxes(title_text="벤치마크(S&P500) 수익률(%)", secondary_y=True)
 
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, width='stretch')
     st.caption(
         "※ 우리 포트폴리오 수익률(%)은 선택한 기간의 포트폴리오 누적 수익률을 의미합니다. "
         "(기준일 대비 자산 가치가 어느 정도 증가/감소했는지를 비율로 표시)"
@@ -178,6 +176,7 @@ def render_benchmark_comparison_section(account_id: str, start_date: str, end_da
 
 
 def render_asset_return_section(
+    user_id: str,
     account_id: str,
     start_date: str,
     end_date: str,
@@ -187,7 +186,7 @@ def render_asset_return_section(
     # ============================
     # 1. daily_snapshots + assets JOIN 조회
     # ============================
-    q = build_daily_snapshots_query(
+    q = query.build_daily_snapshots_query(
         select_cols="""
             date,
             asset_id,
@@ -201,6 +200,7 @@ def render_asset_return_section(
             """,
         start_date=start_date,
         end_date=end_date,
+        user_id=user_id,
         account_id=account_id,
     )
     data = q.execute().data or []
@@ -282,7 +282,8 @@ def render_asset_return_section(
     asset_df["date"] = pd.to_datetime(asset_df["date"]).dt.date  # 시간 제거
     st.line_chart(
         asset_df.set_index("date")["return_rate"],
-        height=300
+        height=300,
+        width='stretch'
     )
 
     # ============================
@@ -301,20 +302,10 @@ def render_asset_return_section(
         )
 
 
-def load_accounts():
-    supabase = get_supabase_client()
-
-    response = (
-        supabase.table("accounts")
-        .select("id, name, brokerage, owner, type")
-        .order("brokerage")
-        .execute()
-    )
-
-    return response.data or []
 
 
-def render_latest_snapshot_table(account_id: str):
+
+def render_latest_snapshot_table(user_id: str, account_id: str):
     st.subheader("🧾 최신 스냅샷 테이블")
 
     if not account_id:
@@ -331,6 +322,14 @@ def render_latest_snapshot_table(account_id: str):
     )
     if account_id != "__ALL__":
         latest_query = latest_query.eq("account_id", account_id)
+    else:
+        user_accounts = query.get_accounts(user_id)
+        user_account_ids = [acc['id'] for acc in user_accounts]
+        if not user_account_ids:
+            st.info("daily_snapshots 데이터가 없습니다.")
+            return
+        latest_query = latest_query.in_("account_id", user_account_ids)
+
 
     latest_row = latest_query.execute().data or []
 
@@ -351,6 +350,11 @@ def render_latest_snapshot_table(account_id: str):
     )
     if account_id != "__ALL__":
         rows_query = rows_query.eq("account_id", account_id)
+    else:
+        user_accounts = query.get_accounts(user_id)
+        user_account_ids = [acc['id'] for acc in user_accounts]
+        rows_query = rows_query.in_("account_id", user_account_ids)
+
 
     rows = rows_query.execute().data or []
 
@@ -363,23 +367,16 @@ def render_latest_snapshot_table(account_id: str):
     df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce")
     df = df[df["quantity"].fillna(0) != 0]
     if df.empty:
-        st.info("ìµœì‹  ?¤ëƒ…??ì— ?˜ëŸ‰ì´ 0???ì‚°???†ìŠµ?ˆë‹¤.")
+        st.info("최신 스냅샷에 수량이 0인 자산만 있습니다.")
         return
 
-    # ✅ manual 자산 원금(cost basis) 정보 붙이기
-    # - manual 자산은 purchase_amount 대신 원금 기준으로 수익률을 계산한다.
-    # - non-manual은 기존 purchase_amount 기준을 유지한다.
-    df = attach_manual_cost_basis(df)
+    df = attach_manual_cost_basis(df, user_id=user_id)
 
     df["purchase_amount"] = pd.to_numeric(df["purchase_amount"], errors="coerce")
     df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce")
     if "manual_principal" in df.columns:
         df["manual_principal"] = pd.to_numeric(df["manual_principal"], errors="coerce")
 
-    # ✅ 수익 계산 기준금액 결정
-    # 초보자 설명:
-    # - manual 자산: manual_principal(원금)
-    # - 그 외: purchase_amount(매수금액)
     df["profit_base_amount"] = df["purchase_amount"]
     manual_mask = df["assets.price_source"].fillna("").str.lower().str.strip().eq("manual")
     df.loc[manual_mask, "profit_base_amount"] = df.loc[manual_mask, "manual_principal"]
@@ -392,8 +389,6 @@ def render_latest_snapshot_table(account_id: str):
         axis=1,
     )
 
-    # 사용자에게 보여줄 통화 표기를 한국어로 변환합니다.
-    # None/빈값은 그대로 두고, 소문자로 정규화해서 매핑합니다.
     currency_map = {
         "krw": "원화",
         "usd": "달러",
@@ -402,8 +397,6 @@ def render_latest_snapshot_table(account_id: str):
         lambda x: currency_map.get(str(x).lower(), x) if x is not None else x
     )
 
-    # 자산 타입 표기를 한국어로 변환합니다.
-    # 매핑되지 않은 타입은 원본 값을 유지합니다.
     asset_type_map = {
         "cash": "예수금",
         "stock": "주식",
@@ -450,9 +443,6 @@ def render_latest_snapshot_table(account_id: str):
 
     display_df = df[columns].copy()
 
-    # 표시 전용 포맷을 지정합니다.
-    # - 수익률은 % 기호를 붙이고
-    # - 수량/가격/금액은 3자리마다 콤마를 넣습니다.
     profit_amount_col = columns[7]
     profit_rate_col = columns[8]
     asset_name_col = columns[1]
@@ -477,12 +467,9 @@ def render_latest_snapshot_table(account_id: str):
         profit_rate_col: "{:.2f}%",
     }
 
-    # Coerce numeric columns to avoid Styler format errors on None values.
     for col in format_map:
         display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
 
-    # 수익률 값의 부호에 따라 수익금액/수익률 컬럼의 글자색을 변경합니다.
-    # 양수면 빨간색, 음수면 파란색, 0은 기본색 유지.
     profit_amount_idx = display_df.columns.get_loc(profit_amount_col)
     profit_rate_idx = display_df.columns.get_loc(profit_rate_col)
     asset_name_idx = display_df.columns.get_loc(asset_name_col)
@@ -505,14 +492,11 @@ def render_latest_snapshot_table(account_id: str):
 
     styled_df = display_df.style.format(format_map).apply(_profit_color, axis=1)
 
-    # Streamlit 경고에 맞춰 use_container_width 대신 width='stretch'를 사용합니다.
-    st.dataframe(styled_df, width="stretch")
+    st.dataframe(styled_df, width='stretch')
 
 
-def render_account_selector():
+def render_account_selector(accounts: list):
     st.sidebar.subheader("🏦 계좌 선택")
-
-    accounts = load_accounts()
 
     if not accounts:
         st.sidebar.warning("등록된 계좌가 없습니다.")
@@ -520,7 +504,7 @@ def render_account_selector():
 
     # 사용자에게 보여줄 label → account_id 매핑
     options = {
-        f"{a['brokerage']} | {a['name']} ({a['owner']})": a["id"]
+        f"{a['brokerage']} | {a['name']}": a["id"]
         for a in accounts
     }
 
@@ -540,28 +524,37 @@ def render_account_selector():
 
 
 
-def _get_min_snapshot_date(account_id: str):
+def _get_min_snapshot_date(user_id: str, account_id: str):
     """
     daily_snapshots의 최소 날짜를 조회한다.
     - YTD 보정에 사용
     """
     supabase = get_supabase_client()
-    query = (
+    q = (
         supabase.table("daily_snapshots")
         .select("date")
         .order("date", desc=False)
         .limit(1)
     )
     if account_id and account_id != "__ALL__":
-        query = query.eq("account_id", account_id)
+        q = q.eq("account_id", account_id)
+    else:
+        # '전체'일 경우 user_id에 속한 모든 계좌를 대상으로 함
+        from asset_portfolio.backend.infra import query
+        user_accounts = query.get_accounts(user_id)
+        user_account_ids = [acc['id'] for acc in user_accounts]
+        if not user_account_ids:
+            return None
+        q = q.in_("account_id", user_account_ids)
 
-    rows = query.execute().data or []
+
+    rows = q.execute().data or []
     if not rows:
         return None
 
     return pd.to_datetime(rows[0]["date"], errors="coerce").date()
 
-def resolve_date_range(period: str, account_id: str):
+def resolve_date_range(user_id: str, period: str, account_id: str):
     """
     기간 코드("오늘", "일주일", "한달", "3달(1분기)", "YTD(올해)", "ALL")를
     실제 조회용 start_date, end_date로 변환
@@ -583,14 +576,11 @@ def resolve_date_range(period: str, account_id: str):
         end_date = None
     else:
         raise ValueError(f"Unknown period: {period}")
-        
-    # # 디버깅(차후 제거)
-    # print("start_date, end_date>>>>>>>>>>", start_date, end_date)
     
     # YTD 구간이 비는 경우, 실제 데이터 시작일로 보정한다.
     note = None
     if period == "YTD(올해)":
-        min_date = _get_min_snapshot_date(account_id)
+        min_date = _get_min_snapshot_date(user_id, account_id)
         if min_date and start_date and min_date > start_date:
             start_date = min_date
             note = f"YTD 구간에 데이터가 없어 시작일을 {min_date}로 보정했습니다."
@@ -598,7 +588,7 @@ def resolve_date_range(period: str, account_id: str):
     return start_date, end_date, note
 
 
-def render_period_selector(account_id: str):
+def render_period_selector(user_id: str, account_id: str):
     st.sidebar.subheader("📅 기간 선택")
 
     period = st.sidebar.radio(
@@ -607,17 +597,18 @@ def render_period_selector(account_id: str):
         index=1  # 기본값: "일주일"
     )
 
-    start_date, end_date, note = resolve_date_range(period, account_id)
+    start_date, end_date, note = resolve_date_range(user_id, period, account_id)
     if note:
         st.sidebar.caption(note)
     return start_date, end_date
 
 
 
-def render_asset_weight_section(account_id, start_date, end_date):
+def render_asset_weight_section(user_id: str, account_id: str, start_date: str, end_date: str):
     st.subheader("📊 자산 비중 변화")
 
     rows = load_asset_weight_timeseries(
+        user_id=user_id,
         account_id=account_id,
         start_date=start_date,
         end_date=end_date,
@@ -627,6 +618,10 @@ def render_asset_weight_section(account_id, start_date, end_date):
     
     # 총액이 0인 날짜는 제거(의미 없는 구간 제거)
     # df는 build_asset_weight_df 결과(valuation_amount_krw, total_amount_krw가 있음)
+    if "total_amount_krw" not in df.columns:
+        st.warning("자산 비중 데이터에 total_amount_krw 컬럼이 없습니다.")
+        return
+        
     df = df[df["total_amount_krw"] > 0].copy()
     if df.empty:
         st.info("자산 비중 데이터가 없습니다. (평가금액 합계가 0인 날짜만 존재)")
@@ -720,13 +715,14 @@ def render_asset_weight_section(account_id, start_date, end_date):
 
     pivot_display = pivot.rename(columns=lambda aid: id_to_label.get(aid, f"asset_id={aid}"))
 
-    st.area_chart(pivot_display, height=350)
+    st.area_chart(pivot_display, height=350, width='stretch')
 
     with st.expander("📄 디버깅: weight 원본"):
         st.dataframe(df.sort_values(["date", weight_col], ascending=[True, False]).head(200))
 
 
 def render_asset_contribution_section(
+    user_id: str,
     account_id: str,
     start_date: str,
     end_date: str,
@@ -737,8 +733,8 @@ def render_asset_contribution_section(
         st.info("계좌를 선택해주세요.")
         return
 
-    snapshots = load_asset_contribution_data(
-        account_id, start_date, end_date
+    snapshots = query.load_asset_contribution_data(
+        user_id, account_id, start_date, end_date
     )
 
     df = calculate_asset_contributions(snapshots)
@@ -754,12 +750,14 @@ def render_asset_contribution_section(
     st.dataframe(
         df.sort_values("date", ascending=False),
         height=350,
+        width='stretch'
     )
 
     st.caption("※ 전일 포트폴리오 대비 기여도 (%)")
 
 
 def render_asset_contribution_stacked_area(
+    user_id: str,
     account_id: str,
     start_date: str,
     end_date: str,
@@ -770,7 +768,7 @@ def render_asset_contribution_stacked_area(
         st.info("계좌를 선택해주세요.")
         return
 
-    snapshots = load_asset_contribution_data(account_id, start_date, end_date)
+    snapshots = query.load_asset_contribution_data(user_id, account_id, start_date, end_date)
     df = calculate_asset_contributions(snapshots)
 
     if df.empty:
@@ -841,6 +839,7 @@ def render_asset_contribution_stacked_area(
 
 
 def render_portfolio_treemap(
+    user_id: str,
     account_id: str,
     start_date: str,
     end_date: str,
@@ -865,19 +864,9 @@ def render_portfolio_treemap(
 
     assets = load_assets_lookup()
 
-    # ✅ Plotly 표시용 한글 라벨 (hover, legend 등에 반영)
-    LABELS = {
-        "valuation_amount": "평가금액",
-        "name_kr": "자산명",
-        "asset_type": "자산유형",
-        "market": "시장",
-        "cum_pct": "누적 기여도(%)",
-        "abs_cum": "누적 기여도(절대)",
-    }
-
     if mode == "현재 비중(평가금액)":
         # df_w는 최소 컬럼: ['asset_id','valuation_amount','name_kr','asset_type','market'] 를 가지도록 준비
-        df_w = load_latest_asset_weights(account_id, start_date, end_date)
+        df_w = load_latest_asset_weights(user_id, account_id, start_date, end_date)
         if df_w.empty:
             st.warning("해당 기간에 daily_snapshots 데이터가 없습니다.")
             return
@@ -906,13 +895,8 @@ def render_portfolio_treemap(
             # ✅ 자산유형별로 색을 다르게 주면 시각적으로 훨씬 구분이 잘 됩니다.
             color="asset_type",
             # ✅ 여러 색을 제공하는 팔레트(원하는 것으로 바꿔도 됨)
-            # color_discrete_sequence=px.colors.qualitative.Set3,  # 최초 팔레트
-            color_discrete_sequence=px.colors.qualitative.Alphabet,  # 색 종류 많은 팔레트
-            # color_continuous_scale=px.colors.diverging.RdYlGn,
-            # color_discrete_sequence=px.colors.diverging.RdYlGn,   # 값에 따른 그레디언트 팔레트
-            # ✅ Plotly가 자동으로 보여주는 필드명을 한글로 바꿉니다.
+            color_discrete_sequence=px.colors.qualitative.Alphabet,
             labels=LABELS,
-            # ✅ hover에 보여줄 값을 명시적으로 통제할 수 있습니다.
             hover_data={
                 "valuation_amount": ":,.0f",
                 "market": True,
@@ -922,16 +906,9 @@ def render_portfolio_treemap(
         )
         fig.update_layout(height=550)
         fig.update_layout(margin=dict(t=20, l=10, r=10, b=10))
-
-        # ✅ hovertemplate을 완전히 덮어써서 Plotly 기본 필드(labels/parent/id)를 표시하지 않게 함
-        # - <extra></extra>를 넣으면 오른쪽 회색 박스도 제거됩니다.
         fig.update_traces(
             hovertemplate="<b>%{label}</b><br>평가금액=%{value:,.0f}<extra></extra>"
         )
-        # ✅ 전체 폰트(타이틀/범례 등) 기본 크기
-        # fig.update_layout(font=dict(size=16))
-
-        # ✅ 트리맵 라벨 텍스트 크기(블록 내부)
         fig.update_traces(textfont_size=fontSizeByLeaf)
 
         st.plotly_chart(fig, width='stretch')
@@ -942,7 +919,7 @@ def render_portfolio_treemap(
 
     else:
         # 기간 누적 기여도
-        snapshots = load_asset_contribution_data(account_id, start_date, end_date)
+        snapshots = query.load_asset_contribution_data(user_id, account_id, start_date, end_date)
         df_c = calculate_asset_contributions(snapshots)
         if df_c.empty:
             st.warning("기여도 데이터를 계산할 수 없습니다.")
@@ -959,14 +936,10 @@ def render_portfolio_treemap(
         latest = latest.merge(assets[["asset_id", "name_kr", "asset_type", "market"]], on="asset_id", how="left")
         latest["name_kr"] = latest["name_kr"].fillna(latest["asset_id"].astype(str))
 
-        # treemap values는 음수를 허용하지 않음 → 절대값(면적) + 색으로 방향 표시
         latest["abs_cum"] = latest["cum_contribution"].abs()
         latest["cum_pct"] = latest["cum_contribution"] * 100
 
-        leaf_count = int(latest["asset_id"].nunique())  # ✅ 말단 개수 근사
-
-        # ✅ 말단이 적으면 더 크게, 많으면 덜 크게(숫자를 하드코딩하지만 "데이터에 따라 자동 변화" = adaptive)
-        # - 최소/최대만 정해두면 사용자 입장에서는 "자동"으로 느껴집니다.
+        leaf_count = int(latest["asset_id"].nunique())
         base = 22
         fontSizeByLeaf = max(12, min(base, int(28 - leaf_count * 0.6)))
 
@@ -976,29 +949,21 @@ def render_portfolio_treemap(
             path=["market", "asset_type", "name_kr"],
             values="abs_cum",
             color="cum_pct",
-            # ✅ 성과 방향(+) / (-)이 색으로 명확하게 보이는 컬러맵
             color_continuous_scale=px.colors.diverging.RdYlGn,
             labels=LABELS,
         )
         fig.update_layout(height=550)
         fig.update_layout(margin=dict(t=20, l=10, r=10, b=10))
-
-        # ✅ 타일 간 여백 축소
-        # fig.update_traces(tiling=dict(pad=2))  
-
-        # 추가로, legend가 세로 공간을 잡아먹는다면(특히 범주형 color):
-        # fig.update_layout(showlegend=False)  # 필요하면 켬/끔
-
         fig.update_traces(
             hovertemplate="<b>%{label}</b><br>누적기여도=%{value:,.0f}<extra></extra>"
         )
-        # ✅ 트리맵 라벨 텍스트 크기(블록 내부)
         fig.update_traces(textfont_size=fontSizeByLeaf)
         st.plotly_chart(fig, width='stretch')
         st.caption("※ 기간 누적 기여도 Treemap (면적=절대값, 색=방향/크기)")
 
 
 def render_asset_contribution_section_full(
+    user_id: str,
     account_id: str,
     start_date: str,
     end_date: str,
@@ -1012,7 +977,7 @@ def render_asset_contribution_section_full(
     # =========================
     # 1) 데이터 로드 + 기여도 계산
     # =========================
-    snapshots = load_asset_contribution_data(account_id, start_date, end_date)
+    snapshots = query.load_asset_contribution_data(user_id, account_id, start_date, end_date)
     df = calculate_asset_contributions(snapshots)
 
     if df.empty:
@@ -1050,10 +1015,6 @@ def render_asset_contribution_section_full(
     top = latest.head(top_n).copy()
     bottom = latest.tail(top_n).sort_values("cum_contribution").copy()
 
-    # 보기 좋게 문자열 생성
-    def _fmt_row(r):
-        return f"{r['name_kr']} ({r['cum_contribution_pct']:.2f}%)"
-
     colL, colR = st.columns(2)
 
     with colL:
@@ -1087,24 +1048,17 @@ def render_asset_contribution_section_full(
     # =========================
     st.markdown("#### 📈 자산별 누적 기여도 (Stacked Area)")
 
-    # 자산이 너무 많으면 UX가 죽는다 → 상위 N개만 보여주자
     max_assets = st.slider("표시할 자산 개수(상위 누적 기여도)", 5, 30, 12)
 
     top_assets = set(latest.head(max_assets)["asset_id"].tolist())
     df_plot = df[df["asset_id"].isin(top_assets)].copy()
-    # df_plot["date"] = pd.to_datetime(df_plot["date"]).dt.strftime("%Y-%m-%d")
     df_plot["date"] = pd.to_datetime(df_plot["date"])  # ✅ datetime 유지
 
     chart = (
         alt.Chart(df_plot)
         .mark_area()
         .encode(
-            # 2번 방법: axis format을 날짜만 나오도록 강제
             x=alt.X("date:T", title="Date", axis=alt.Axis(format="%Y-%m-%d")),
-            # 문자열 날짜는 O(Ordinal)로 처리 → 시간(12 PM) 표시가 사라짐
-            # 날짜를 “시간 데이터”가 아니라 “범주(ordered)”로 처리(단점: 기간이 길면 틱이 너무 많아질 수 있습니다.)
-            # x=alt.X("date:O", title="Date"),
-            # x=alt.X("date:T", title="Date"),
             y=alt.Y("cum_contribution_pct:Q", stack="zero", title="누적 기여도(%)"),
             color=alt.Color("name_kr:N", title="자산"),
             tooltip=[
@@ -1132,14 +1086,15 @@ def render_asset_contribution_section_full(
                 ["자산명", "시장", "유형", "누적기여도(%)"]
             ],
             height=400,
+            width='stretch'
         )
 
 
-def render_transactions_table_section(account_id: str, start_date: str, end_date: str):
+def render_transactions_table_section(user_id: str, account_id: str, start_date: str, end_date: str):
     st.subheader("거래 내역")
 
     supabase = get_supabase_client()
-    query = (
+    q = (
         supabase.table("transactions")
         .select("""
             id,
@@ -1153,22 +1108,27 @@ def render_transactions_table_section(account_id: str, start_date: str, end_date
             tax,
             memo,
             assets ( ticker, name_kr, currency ),
-            accounts ( name, brokerage, owner, type )
+            accounts ( name, brokerage, old_owner, type )
         """)
         .order("transaction_date", desc=True)
     )
 
-    # ALL이 아닌 경우에만 계좌 필터 적용
-    if account_id and account_id != "__ALL__":
-        query = query.eq("account_id", account_id)
-
     if start_date is not None:
-        query = query.gte("transaction_date", start_date)
-
+        q = q.gte("transaction_date", start_date)
     if end_date is not None:
-        query = query.lte("transaction_date", end_date)
+        q = q.lte("transaction_date", end_date)
 
-    response = query.execute()
+    if account_id and account_id != "__ALL__":
+        q = q.eq("account_id", account_id)
+    else:
+        user_accounts = query.get_accounts(user_id)
+        user_account_ids = [acc['id'] for acc in user_accounts]
+        if not user_account_ids:
+            st.info("선택한 기간에 거래 내역이 없습니다.")
+            return
+        q = q.in_("account_id", user_account_ids)
+
+    response = q.execute()
     rows = response.data or []
 
     if not rows:

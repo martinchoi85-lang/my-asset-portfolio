@@ -10,6 +10,7 @@ from asset_portfolio.backend.services.data_contracts import (
 
 
 def load_asset_weight_timeseries(
+    user_id: str,
     account_id: str,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -23,6 +24,7 @@ def load_asset_weight_timeseries(
         select_cols="date, asset_id, valuation_amount, assets(name_kr, currency)",
         start_date=start_date,
         end_date=end_date,
+        user_id=user_id,
         account_id=account_id,
     )
     response = query.order("date").execute()
@@ -121,7 +123,7 @@ def _safe_float_series(s: pd.Series, col_name: str) -> pd.Series:
     return pd.to_numeric(out, errors="coerce")
 
 
-def load_latest_asset_weights(account_id: str, start_date: str, end_date: str) -> pd.DataFrame:
+def load_latest_asset_weights(user_id: str, account_id: str, start_date: str, end_date: str) -> pd.DataFrame:
     """
     Treemap용 최신 비중 데이터
     정책: (중요) '자산별 최신 1행'이 아니라 '최신 날짜(기준일) 1일치 스냅샷'을 사용한다.
@@ -130,6 +132,7 @@ def load_latest_asset_weights(account_id: str, start_date: str, end_date: str) -
         select_cols="date, asset_id, valuation_amount, assets(currency)",
         start_date=start_date,
         end_date=end_date,
+        user_id=user_id,
         account_id=account_id,
     )
 
