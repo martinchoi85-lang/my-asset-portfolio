@@ -15,6 +15,7 @@ from asset_portfolio.dashboard.render import (
     render_portfolio_treemap,
     render_transactions_table_section,
     render_latest_snapshot_table,
+    render_asset_grouping_pie_section,
 )
 from asset_portfolio.dashboard.transaction_editor import render_transaction_editor
 from asset_portfolio.dashboard.transaction_importer import render_transaction_importer
@@ -135,13 +136,18 @@ def render_main_dashboard():
         st.stop()
     
     start_date, end_date = render_period_selector(user_id, account_id)
-
-    tab1, tab2 = st.tabs(["Dashboard", "Transactions"])
+    
+    tab1, tab2, tab3 = st.tabs(["대시보드", "자산 분석", "거래 내역"])
 
     with tab1:
         render_kpi_section(user_id, account_id, start_date, end_date)
         st.divider()
         render_latest_snapshot_table(user_id, account_id)
+        st.divider()
+        render_portfolio_treemap(user_id, account_id, start_date, end_date)
+
+    with tab2:
+        render_asset_grouping_pie_section(user_id, account_id)
         st.divider()
         render_benchmark_comparison_section(user_id, account_id, start_date, end_date)
         st.divider()
@@ -150,11 +156,10 @@ def render_main_dashboard():
         render_asset_return_section(user_id, account_id, start_date, end_date)
         st.divider()
         render_asset_weight_section(user_id, account_id, start_date, end_date)
-        st.divider()
-        render_portfolio_treemap(user_id, account_id, start_date, end_date)
 
-    with tab2:
+    with tab3:
         render_transactions_table_section(user_id, account_id, start_date, end_date)
+
 
 # --- Main app execution logic ---
 _inject_mobile_redirect()

@@ -465,7 +465,7 @@ def _execute_upload(prepared_rows: List[PreparedTransaction], auto_cash: bool) -
     return success_count, created_assets
 
 
-def render_transaction_importer() -> None:
+def render_transaction_importer(user_id: str) -> None:
     st.title("📥 Transaction Importer")
     st.caption("CSV/XLSX 업로드로 매매 내역 또는 배당금 내역을 일괄 등록합니다.")
 

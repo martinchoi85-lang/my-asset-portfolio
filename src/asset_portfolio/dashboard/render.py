@@ -32,6 +32,192 @@ from asset_portfolio.backend.infra import query
 from asset_portfolio.dashboard.data import load_assets_lookup
 
 
+@st.cache_data(ttl=600)
+def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
+    """
+    자산 분류 기준(자산 유형/기초자산 클래스)별 평가금액 합계를 가져옵니다.
+
+    - 캐시를 사용해서 동일한 계좌/사용자 요청을 빠르게 처리합니다.
+    - Supabase에서 원본 데이터를 가져오고, 파이썬에서 그룹 집계를 수행합니다.
+    - asset_summary_live가 비어 있으면 daily_snapshots의 최신 날짜 데이터를 대체로 사용합니다.
+    """
+    supabase = get_supabase_client()
+
+    # 기본 조회: asset_summary_live + assets 조인
+    query_builder = (
+        supabase.table("asset_summary_live")
+        .select(
+            "asset_id, account_id, total_valuation_amount, "
+            "assets (asset_type, underlying_asset_class)"
+        )
+    )
+
+    # 계좌 선택이 "전체"인지 여부에 따라 필터 조건이 달라짐
+    if account_id and account_id != "__ALL__":
+        query_builder = query_builder.eq("account_id", account_id)
+    else:
+        # 전체 계좌 조회 시, 로그인 사용자의 계좌 리스트를 가져와서 IN 조건으로 조회
+        user_accounts = query.get_accounts(user_id)
+        user_account_ids = [acc["id"] for acc in user_accounts]
+        if not user_account_ids:
+            return pd.DataFrame(
+                columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
+            )
+        query_builder = query_builder.in_("account_id", user_account_ids)
+
+    rows = query_builder.execute().data or []
+
+    # ============================================
+    # 1) 우선 asset_summary_live 기반 데이터 정규화
+    # ============================================
+    df = pd.json_normalize(rows, sep=".") if rows else pd.DataFrame()
+
+    # 데이터 안전성: 숫자 변환 + 결측치 기본값 처리
+    if not df.empty:
+        df["total_valuation_amount"] = pd.to_numeric(
+            df["total_valuation_amount"], errors="coerce"
+        ).fillna(0)
+        df["assets.asset_type"] = df["assets.asset_type"].fillna("미분류")
+        df["assets.underlying_asset_class"] = df["assets.underlying_asset_class"].fillna("미분류")
+
+        # 표준화된 컬럼명으로 정리
+        df = df.rename(
+            columns={
+                "assets.asset_type": "asset_type",
+                "assets.underlying_asset_class": "underlying_asset_class",
+            }
+        )
+
+        return df[["asset_type", "underlying_asset_class", "total_valuation_amount"]]
+
+    # ==========================================================
+    # 2) asset_summary_live가 비어 있으면 최신 스냅샷으로 대체
+    # ==========================================================
+    latest_query = (
+        supabase.table("daily_snapshots")
+        .select("date")
+        .order("date", desc=True)
+        .limit(1)
+    )
+    if account_id and account_id != "__ALL__":
+        latest_query = latest_query.eq("account_id", account_id)
+    else:
+        user_accounts = query.get_accounts(user_id)
+        user_account_ids = [acc["id"] for acc in user_accounts]
+        if not user_account_ids:
+            return pd.DataFrame(
+                columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
+            )
+        latest_query = latest_query.in_("account_id", user_account_ids)
+
+    latest_row = latest_query.execute().data or []
+    if not latest_row:
+        return pd.DataFrame(
+            columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
+        )
+
+    latest_date = latest_row[0]["date"]
+
+    snapshot_query = (
+        supabase.table("daily_snapshots")
+        .select(
+            "asset_id, account_id, valuation_amount, "
+            "assets (asset_type, underlying_asset_class)"
+        )
+        .eq("date", latest_date)
+    )
+    if account_id and account_id != "__ALL__":
+        snapshot_query = snapshot_query.eq("account_id", account_id)
+    else:
+        user_accounts = query.get_accounts(user_id)
+        user_account_ids = [acc["id"] for acc in user_accounts]
+        if not user_account_ids:
+            return pd.DataFrame(
+                columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
+            )
+        snapshot_query = snapshot_query.in_("account_id", user_account_ids)
+
+    snapshot_rows = snapshot_query.execute().data or []
+    if not snapshot_rows:
+        return pd.DataFrame(
+            columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
+        )
+
+    snapshot_df = pd.json_normalize(snapshot_rows, sep=".")
+    snapshot_df["valuation_amount"] = pd.to_numeric(
+        snapshot_df["valuation_amount"], errors="coerce"
+    ).fillna(0)
+    snapshot_df["assets.asset_type"] = snapshot_df["assets.asset_type"].fillna("미분류")
+    snapshot_df["assets.underlying_asset_class"] = snapshot_df["assets.underlying_asset_class"].fillna("미분류")
+
+    snapshot_df = snapshot_df.rename(
+        columns={
+            "assets.asset_type": "asset_type",
+            "assets.underlying_asset_class": "underlying_asset_class",
+            "valuation_amount": "total_valuation_amount",
+        }
+    )
+
+    return snapshot_df[["asset_type", "underlying_asset_class", "total_valuation_amount"]]
+
+
+def render_asset_grouping_pie_section(user_id: str, account_id: str):
+    st.subheader("🧩 동적 그룹화 차트")
+
+    if not account_id:
+        st.info("계좌를 선택해주세요.")
+        return
+
+    group_options = {
+        "자산 유형 (asset_type)": "asset_type",
+        "기초자산 클래스 (underlying_asset_class)": "underlying_asset_class",
+    }
+
+    # 사용자가 어떤 기준으로 묶을지 선택하도록 제공
+    selected_label = st.selectbox(
+        "묶을 기준을 선택하세요.",
+        list(group_options.keys()),
+    )
+    group_key = group_options[selected_label]
+
+    # DB에서 데이터를 가져오고, 선택된 기준으로 그룹 집계
+    raw_df = load_asset_grouping_summary(user_id=user_id, account_id=account_id)
+    if raw_df.empty:
+        st.info("표시할 자산 데이터가 없습니다.")
+        return
+
+    # 선택한 기준으로 평가금액 합계를 계산
+    grouped_df = (
+        raw_df.groupby(group_key, as_index=False)["total_valuation_amount"]
+        .sum()
+        .sort_values("total_valuation_amount", ascending=False)
+    )
+
+    # 시각화를 위한 파이 차트 (Plotly)
+    fig = px.pie(
+        grouped_df,
+        names=group_key,
+        values="total_valuation_amount",
+        hole=0.35,
+        title="분류 기준별 평가금액 비중",
+    )
+    fig.update_traces(textposition="inside", textinfo="percent+label")
+    fig.update_layout(height=360, margin=dict(t=40, l=10, r=10, b=10))
+
+    st.plotly_chart(fig, width='stretch')
+
+    # 표 형태로도 확인할 수 있도록 데이터프레임 출력
+    st.dataframe(
+        grouped_df.rename(
+            columns={
+                group_key: "분류 기준",
+                "total_valuation_amount": "평가금액 합계",
+            }
+        ),
+        width='stretch',
+    )
+    
+    
 def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date: str):
     st.subheader("📈 Portfolio 전체 수익률")
 
