@@ -104,7 +104,7 @@ def render_recurring_order_editor(user_id: str):
     user_account_ids = acc_df["id"].tolist()
     existing_rows = (
         supabase.table("recurring_orders")
-        .select("*, assets(name_kr, ticker, currency)")
+        .select("*")
         .in_("account_id", user_account_ids)
         .order("created_at", desc=True)
         .execute()
@@ -115,10 +115,26 @@ def render_recurring_order_editor(user_id: str):
         st.info("등록된 정기 매수가 없습니다.")
         return
 
+    # Load all assets to map id to info
+    all_assets_df = _load_assets_df()
+    # Create a helper to get label
+    # all_assets_df has columns like 'id', 'ticker', 'name_kr', etc.
+    # We can create a dictionary for O(1) lookup
+    asset_info_map = {}
+    if not all_assets_df.empty:
+        # Assuming 'id' is unique
+        for _, row in all_assets_df.iterrows():
+            asset_info_map[row['id']] = row
+
     df_orders = pd.DataFrame(existing_rows)
-    df_orders["asset_label"] = df_orders["assets"].apply(
-        lambda r: f"{r.get('ticker')} | {r.get('name_kr')}" if isinstance(r, dict) else ""
-    )
+    
+    def _get_asset_label(asset_id):
+        if asset_id not in asset_info_map:
+            return f"Unknown (id={asset_id})"
+        info = asset_info_map[asset_id]
+        return f"{info.get('ticker')} | {info.get('name_kr')}"
+
+    df_orders["asset_label"] = df_orders["asset_id"].apply(_get_asset_label)
     st.dataframe(
         df_orders[[
             "id", "asset_label", "frequency", "day_of_month", "day_of_week",
