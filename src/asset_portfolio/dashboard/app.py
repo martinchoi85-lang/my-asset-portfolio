@@ -16,6 +16,7 @@ from asset_portfolio.dashboard.render import (
     render_transactions_table_section,
     render_latest_snapshot_table,
     render_asset_grouping_pie_section,
+    render_portfolio_trend_chart,
 )
 from asset_portfolio.dashboard.transaction_editor import render_transaction_editor
 from asset_portfolio.dashboard.transaction_importer import render_transaction_importer
@@ -141,6 +142,8 @@ def render_main_dashboard():
 
     with tab1:
         render_kpi_section(user_id, account_id, start_date, end_date)
+        st.divider()
+        render_portfolio_trend_chart(user_id, account_id, start_date, end_date)
         st.divider()
         render_latest_snapshot_table(user_id, account_id)
         st.divider()

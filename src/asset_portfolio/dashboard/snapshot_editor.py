@@ -66,7 +66,7 @@ def _upsert_asset_prices(rows: list[dict]) -> None:
     ).execute()
 
 
-def render_snapshot_editor():
+def render_snapshot_editor(user_id: str):
     st.title("🏦 Manual Snapshot Editor (예적금/채권/연금)")
 
     if "snap_busy" not in st.session_state:

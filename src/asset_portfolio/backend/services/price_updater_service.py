@@ -237,6 +237,7 @@ class PriceUpdaterService:
         new_price = float(price)
 
         # ✅ 성공: current_price + 메타 기록(정책 컬럼 price_source는 건드리지 않음)
+        # ✅ 성공: current_price + 메타 기록(정책 컬럼 price_source는 건드리지 않음)
         supabase.table("assets").update({
             "current_price": new_price,
             "price_updated_at": now.isoformat(),
@@ -244,6 +245,17 @@ class PriceUpdaterService:
             "price_update_error": None,
             # "price_source": "yfinance",  # ❌ 절대 쓰면 안 됨
         }).eq("id", asset_id).execute()
+
+        # ✅ [New] history 테이블에도 저장 (스냅샷 생성 시 참조됨)
+        # - 이를 저장해야 generate_daily_snapshots가 오늘자 가격으로 평가를 수행함
+        supabase.table("asset_prices").upsert({
+            "price_date": now.date().isoformat(),
+            "asset_id": asset_id,
+            "close_price": new_price,
+            "currency": row.get("currency") or "",
+            "source": "yfinance",
+            "fetched_at": now.isoformat(),
+        }, on_conflict="price_date,asset_id").execute()
 
         return PriceUpdateResult(
             asset_id=asset_id,

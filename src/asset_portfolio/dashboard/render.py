@@ -33,6 +33,12 @@ from asset_portfolio.dashboard.data import load_assets_lookup
 
 
 @st.cache_data(ttl=600)
+def load_portfolio_return_series_cached(user_id: str, account_id: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """cached wrapper for get_portfolio_return_series"""
+    return get_portfolio_return_series(user_id, account_id, start_date, end_date)
+
+
+@st.cache_data(ttl=600)
 def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
     """
     자산 분류 기준(자산 유형/기초자산 클래스)별 평가금액 합계를 가져옵니다.
@@ -193,10 +199,40 @@ def render_asset_grouping_pie_section(user_id: str, account_id: str):
         .sort_values("total_valuation_amount", ascending=False)
     )
 
+    # 한글 맵핑 정의
+    type_map = {
+        "fund": "펀드",
+        "etf": "ETF",
+        "tdf": "TDF",
+        "cash": "현금(예수금)",
+        "stock": "주식",
+        "deposit": "예적금",
+        "reits": "리츠",
+    }
+    class_map = {
+        "Multi-Asset": "멀티에셋",
+        "Real Asset": "대체자산",
+        "Fixed Income": "채권",
+        "Equity": "주식",
+        "Other": "기타",
+    }
+    
+    # 맵핑 적용 함수
+    def _map_label(val):
+        s = str(val).strip()
+        if group_key == "asset_type":
+            lower_s = s.lower()
+            return type_map.get(lower_s, s)
+        elif group_key == "underlying_asset_class":
+            return class_map.get(s, s)
+        return s
+
     # 시각화를 위한 파이 차트 (Plotly)
+    grouped_df["display_label"] = grouped_df[group_key].apply(_map_label)
+    
     fig = px.pie(
         grouped_df,
-        names=group_key,
+        names="display_label",
         values="total_valuation_amount",
         hole=0.35,
         title="분류 기준별 평가금액 비중",
@@ -207,14 +243,24 @@ def render_asset_grouping_pie_section(user_id: str, account_id: str):
     st.plotly_chart(fig, width='stretch')
 
     # 표 형태로도 확인할 수 있도록 데이터프레임 출력
+    display_df = grouped_df.copy()
+    display_df[group_key] = display_df["display_label"] # 맵핑된 한글 적용
+    
     st.dataframe(
-        grouped_df.rename(
+        display_df[[group_key, "total_valuation_amount"]].rename(
             columns={
                 group_key: "분류 기준",
                 "total_valuation_amount": "평가금액 합계",
             }
         ),
         width='stretch',
+        hide_index=True,
+        column_config={
+            "평가금액 합계": st.column_config.NumberColumn(
+                "평가금액 합계(₩)",
+                format="%d",  # 소수점 제거
+            )
+        }
     )
     
     
@@ -226,9 +272,13 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
         return
 
     # =========================
-    # 1) 포트폴리오 시계열
+    # 1) 포트폴리오 시계열 (Cached)
     # =========================
-    portfolio_df = get_portfolio_return_series(user_id, account_id, start_date, end_date)
+    @st.cache_data(ttl=600)
+    def _load_portfolio_series(u_id, acc_id, s_date, e_date):
+        return get_portfolio_return_series(u_id, acc_id, s_date, e_date)
+
+    portfolio_df = _load_portfolio_series(user_id, account_id, start_date, end_date)
 
     if portfolio_df.empty:
         st.warning("조회된 데이터가 없습니다.")
@@ -261,6 +311,66 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
     c4.metric("누적 수익률", f"{portfolio_return_pct:.2f}%")
 
 
+def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str, end_date: str):
+    st.subheader("📈 자산 추세 (Trend)")
+    
+    if not account_id:
+        st.info("계좌를 선택해주세요.")
+        return
+
+    # 데이터 조회
+    df = get_portfolio_return_series(user_id, account_id, start_date, end_date)
+    
+    if df.empty:
+        st.info("표시할 데이터가 없습니다.")
+        return
+
+    # Plotly Line Chart
+    fig = go.Figure()
+
+    # 1) 평가금액 (Line)
+    fig.add_trace(go.Scatter(
+        x=df["date"], 
+        y=df["valuation_amount"],
+        mode='lines',
+        name='총 평가금액',
+        # stackgroup='one',  <-- 제거: Area 차트가 0부터 시작하게 강제하는 원인
+        line=dict(width=2, color='rgba(55, 128, 191, 1.0)'),
+    ))
+
+    # 2) 투자원금 (Line)
+    fig.add_trace(go.Scatter(
+        x=df["date"], 
+        y=df["purchase_amount"],
+        mode='lines',
+        name='투자원금 (Net Invested)',
+        line=dict(width=2, color='rgba(255, 165, 0, 1.0)', dash='dot'), # 구분을 위해 dot or lighter color
+    ))
+
+    # Y축 범위 계산 (데이터의 min/max 기준)
+    # 0을 포함하지 않고 변화량을 잘 보여주도록 설정
+    all_values = pd.concat([df["valuation_amount"], df["purchase_amount"]])
+    min_val = all_values.min()
+    max_val = all_values.max()
+    margin = (max_val - min_val) * 0.1 if max_val != min_val else max_val * 0.05
+    
+    fig.update_layout(
+        height=350,
+        margin=dict(t=10, l=10, r=10, b=10),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="left", x=0),
+    )
+    # rangemode="normal"은 기본적으로 데이터 범위에 맞춤 (0 강제 안함)
+    fig.update_yaxes(
+        title_text="금액 (KRW)", 
+        tickformat=",", 
+        range=[max(0, min_val - margin), max_val + margin]
+    )
+
+    st.plotly_chart(fig, width='stretch')
+
+
+
 def render_benchmark_comparison_section(user_id: str, account_id: str, start_date: str, end_date: str):
     st.subheader("벤치마크(S&P500)와 수익률 비교")
 
@@ -269,9 +379,9 @@ def render_benchmark_comparison_section(user_id: str, account_id: str, start_dat
         return
 
     # =========================
-    # 1) 포트폴리오 수익률
+    # 1) 포트폴리오 수익률 (Cached)
     # =========================
-    portfolio_df = get_portfolio_return_series(user_id, account_id, start_date, end_date)
+    portfolio_df = load_portfolio_return_series_cached(user_id, account_id, start_date, end_date)
 
     if portfolio_df.empty:
         st.warning("조회 가능한 데이터가 없습니다.")
@@ -860,12 +970,12 @@ def render_asset_weight_section(user_id: str, account_id: str, start_date: str, 
         df = df_agg[["date", "asset_id", "asset_name", "weight"]].copy()
 
     # =========================
-    # ✅ pivot은 asset_id로 (name_kr 변경/중복 대비)
-    # =========================    
-
+    # ✅ 시각화 개선 (Plotly Area Chart + Top N + Others)
+    # =========================
+    
     # 어떤 경로에서 오든 weight 컬럼을 안전하게 선택
     weight_col = None
-    for c in ["weight", "weight_krw", "weight_pct", "weight_krw_pct"]:
+    for c in ["weight_krw", "weight", "weight_pct", "weight_krw_pct"]:
         if c in df.columns:
             weight_col = c
             break
@@ -874,37 +984,75 @@ def render_asset_weight_section(user_id: str, account_id: str, start_date: str, 
         st.error(f"자산 비중 컬럼이 없습니다. df.columns={list(df.columns)}")
         return
 
-    # df["date"] = pd.to_datetime(df["date"]).dt.date  # 시간 제거
+    # 날짜 시간 제거
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
     df = df.dropna(subset=["date"])
 
-    pivot = (
-        df.pivot_table(
-            index="date",
-            columns="asset_id",
-            values=weight_col,
-            aggfunc="sum",
-        )
-        .fillna(0)
-        .sort_index()
+    # --- Pagination (Rank Range) ---
+    # 1. 자산별 평균 비중 계산 및 정렬
+    avg_weights = df.groupby("asset_name")[weight_col].mean().sort_values(ascending=False)
+    all_sorted_assets = avg_weights.index.tolist()
+    total_assets = len(all_sorted_assets)
+    
+    # 2. 페이지네이션 UI
+    PAGE_SIZE = 10
+    options = []
+    import math
+    num_pages = math.ceil(total_assets / PAGE_SIZE) if total_assets > 0 else 1
+    
+    for i in range(num_pages):
+        start = i * PAGE_SIZE + 1
+        end = min((i + 1) * PAGE_SIZE, total_assets)
+        options.append(f"Top {start}~{end}위")
+        
+    selected_page = st.selectbox("순위 구간 선택", options, index=0)
+    
+    # 3. 선택된 구간의 자산 필터링
+    page_idx = options.index(selected_page)
+    start_idx = page_idx * PAGE_SIZE
+    end_idx = start_idx + PAGE_SIZE
+    
+    target_assets = all_sorted_assets[start_idx:end_idx]
+    
+    df_filtered = df[df["asset_name"].isin(target_assets)].copy()
+    
+    # 4. 정렬 (범례 순서 보장)
+    df_filtered["asset_name"] = pd.Categorical(df_filtered["asset_name"], categories=target_assets, ordered=True)
+    df_filtered = df_filtered.sort_values(["date", "asset_name"])
+
+    # 5. 퍼센트 변환
+    df_filtered["weight_pct"] = df_filtered[weight_col] * 100
+
+    fig = px.area(
+        df_filtered,
+        x="date",
+        y="weight_pct",
+        color="asset_name",
+        title=f"자산 비중 변화 ({selected_page})",
+        labels={"weight_pct": "비중(%)", "asset_name": "자산명", "date": "날짜"},
+        groupnorm=None
+    )
+    
+    fig.update_layout(
+        height=400,
+        margin=dict(t=40, l=10, r=10, b=10),
+        hovermode="x unified",
+        yaxis_title="비중(%)"
+    )
+    # y축 범위: Top 1~10이면 0~100 고정, 그 외에는 데이터에 맞게 자동 (작은 비중도 잘 보이게)
+    if page_idx == 0:
+        fig.update_yaxes(range=[0, 100])
+    
+    st.plotly_chart(fig, width='stretch')
+
+    st.caption(
+        "※ 내 전체 자산(KRW 환산 기준)에서 각 자산이 차지하는 비율(%)이 시간에 따라 어떻게 변했는지를 보여줍니다."
+        "특정 자산 가격이 급등하거나, 추가 매수를 했을 때 비중 영역이 커지는 것을 볼 수 있습니다. (리밸런싱 참고용)"
     )
 
-    # =========================
-    # ✅ 표시용 라벨 매핑 (asset_id -> asset_name)
-    # =========================
-    id_to_label = (
-        df[["asset_id", "asset_name"]]
-        .drop_duplicates()
-        .set_index("asset_id")["asset_name"]
-        .to_dict()
-    )
-
-    pivot_display = pivot.rename(columns=lambda aid: id_to_label.get(aid, f"asset_id={aid}"))
-
-    st.area_chart(pivot_display, height=350, width='stretch')
 
     with st.expander("📄 디버깅: weight 원본"):
-        st.dataframe(df.sort_values(["date", weight_col], ascending=[True, False]).head(200))
+        st.dataframe(df_filtered.sort_values(["date", weight_col], ascending=[True, False]).head(200))
 
 
 def render_asset_contribution_section(
@@ -1232,31 +1380,7 @@ def render_asset_contribution_section_full(
     # =========================
     # 4) Stacked Area (누적 기여도)
     # =========================
-    st.markdown("#### 📈 자산별 누적 기여도 (Stacked Area)")
-
-    max_assets = st.slider("표시할 자산 개수(상위 누적 기여도)", 5, 30, 12)
-
-    top_assets = set(latest.head(max_assets)["asset_id"].tolist())
-    df_plot = df[df["asset_id"].isin(top_assets)].copy()
-    df_plot["date"] = pd.to_datetime(df_plot["date"])  # ✅ datetime 유지
-
-    chart = (
-        alt.Chart(df_plot)
-        .mark_area()
-        .encode(
-            x=alt.X("date:T", title="Date", axis=alt.Axis(format="%Y-%m-%d")),
-            y=alt.Y("cum_contribution_pct:Q", stack="zero", title="누적 기여도(%)"),
-            color=alt.Color("name_kr:N", title="자산"),
-            tooltip=[
-                alt.Tooltip("date:T", title="Date"),
-                alt.Tooltip("name_kr:N", title="자산"),
-                alt.Tooltip("cum_contribution_pct:Q", title="누적기여도(%)", format=".2f"),
-            ],
-        )
-        .properties(height=400)
-    )
-
-    st.altair_chart(chart, width='stretch')
+    render_asset_contribution_stacked_area(user_id, account_id, start_date, end_date)
 
     # =========================
     # 5) 디버깅/검증용 테이블
