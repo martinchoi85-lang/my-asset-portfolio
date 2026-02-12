@@ -1630,3 +1630,231 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
                 st.error(f"삭제 실패: {e}")
 
 
+def render_asset_transaction_history(user_id: str, account_id: str):
+    """
+    보유 중인 자산을 선택하여 해당 자산의 전체 거래 내역을 조회합니다.
+    
+    특징:
+    - 현재 보유 중인 자산(quantity > 0)만 드롭다운에 표시
+    - 선택한 자산의 전체 거래 내역을 날짜 역순으로 표시
+    - 거래 메모를 포함하여 매수 이유 등을 한눈에 파악 가능
+    """
+    st.subheader("📝 자산별 거래 내역")
+    
+    # ================================
+    # 1. 보유 중인 자산 조회 (quantity > 0)
+    # ================================
+    supabase = get_supabase_client()
+    
+    # 최신 daily_snapshots에서 보유 중인 자산 조회
+    q_snapshots = (
+        supabase.table("daily_snapshots")
+        .select("""
+            date,
+            asset_id,
+            quantity,
+            assets ( ticker, name_kr, currency )
+        """)
+    )
+    
+    if account_id and account_id != "__ALL__":
+        q_snapshots = q_snapshots.eq("account_id", account_id)
+    else:
+        # '전체'일 경우 user_id에 속한 모든 계좌
+        user_accounts = query.get_accounts(user_id)
+        user_account_ids = [acc['id'] for acc in user_accounts]
+        if not user_account_ids:
+            st.info("등록된 계좌가 없습니다.")
+            return
+        q_snapshots = q_snapshots.in_("account_id", user_account_ids)
+    
+    # 최신 날짜 기준으로 필터링
+    q_snapshots = q_snapshots.order("date", desc=True)
+    
+    snapshot_rows = q_snapshots.execute().data or []
+    
+    if not snapshot_rows:
+        st.info("스냅샷 데이터가 없습니다. 먼저 스냅샷을 생성해주세요.")
+        return
+    
+    # 최신 날짜 데이터만 필터링 (같은 자산이 여러 날짜에 있을 수 있음)
+    df_snapshots = pd.DataFrame(snapshot_rows)
+    
+    # 날짜별로 그룹화하여 최신 날짜만 선택
+    if "date" not in df_snapshots.columns:
+        # date 컬럼이 없으면 전체 사용 (이미 order by date desc로 정렬됨)
+        df_latest = df_snapshots.copy()  # SettingWithCopyWarning 방지
+    else:
+        latest_date = pd.to_datetime(df_snapshots["date"]).max()
+        df_latest = df_snapshots[pd.to_datetime(df_snapshots["date"]) == latest_date].copy()  # SettingWithCopyWarning 방지
+    
+    # asset_id별로 quantity 합계 계산 (같은 자산이 여러 계좌에 있을 수 있음)
+    df_latest.loc[:, "quantity"] = pd.to_numeric(df_latest["quantity"], errors="coerce").fillna(0)
+    df_asset_qty = (
+        df_latest.groupby("asset_id", as_index=False)
+        .agg({"quantity": "sum", "assets": "first"})
+    )
+    
+    # 보유 중인 자산만 필터링 (quantity > 0)
+    df_holding = df_asset_qty[df_asset_qty["quantity"] > 0].copy()
+    
+    if df_holding.empty:
+        st.info("현재 보유 중인 자산이 없습니다.")
+        return
+    
+    # assets 정보 추출
+    df_holding["ticker"] = df_holding["assets"].apply(lambda x: (x or {}).get("ticker", ""))
+    df_holding["name_kr"] = df_holding["assets"].apply(lambda x: (x or {}).get("name_kr", ""))
+    df_holding["currency"] = df_holding["assets"].apply(lambda x: (x or {}).get("currency", ""))
+    
+    # 드롭다운 표시용 라벨 생성: "티커 | 자산명 (통화)"
+    df_holding["display_label"] = df_holding.apply(
+        lambda row: f"{row['ticker']} | {row['name_kr']} ({row['currency']}) - 보유: {row['quantity']:.2f}",
+        axis=1
+    )
+    
+    # asset_id를 키로 하는 딕셔너리 생성
+    asset_options = df_holding.set_index("asset_id")["display_label"].to_dict()
+    
+    if not asset_options:
+        st.info("보유 중인 자산이 없습니다.")
+        return
+    
+    # ================================
+    # 2. 자산 선택 드롭다운
+    # ================================
+    st.markdown("#### 🔍 자산 선택")
+    
+    # 자산 정렬: 보유 수량 기준 내림차순
+    sorted_asset_ids = df_holding.sort_values("quantity", ascending=False)["asset_id"].tolist()
+    
+    selected_asset_id = st.selectbox(
+        "조회할 자산을 선택하세요",
+        options=sorted_asset_ids,
+        format_func=lambda aid: asset_options.get(aid, str(aid)),
+        key="asset_transaction_history_selector"
+    )
+    
+    if not selected_asset_id:
+        return
+    
+    # ================================
+    # 3. 선택한 자산의 거래 내역 조회
+    # ================================
+    st.markdown("#### 📊 거래 내역")
+    
+    q_transactions = (
+        supabase.table("transactions")
+        .select("""
+            id,
+            transaction_date,
+            trade_type,
+            quantity,
+            price,
+            fee,
+            tax,
+            memo,
+            accounts (name, brokerage, old_owner)
+        """)
+        .eq("asset_id", int(selected_asset_id))
+        .order("transaction_date", desc=True)
+    )
+    
+    # 계좌 필터링
+    if account_id and account_id != "__ALL__":
+        q_transactions = q_transactions.eq("account_id", account_id)
+    else:
+        user_accounts = query.get_accounts(user_id)
+        user_account_ids = [acc['id'] for acc in user_accounts]
+        if user_account_ids:
+            q_transactions = q_transactions.in_("account_id", user_account_ids)
+    
+    tx_response = q_transactions.execute()
+    tx_rows = tx_response.data or []
+    
+    if not tx_rows:
+        st.info("해당 자산의 거래 내역이 없습니다.")
+        return
+    
+    # ================================
+    # 4. 거래 내역 테이블 구성
+    # ================================
+    df_tx = pd.DataFrame(tx_rows)
+    
+    # 날짜 변환
+    df_tx["transaction_date"] = pd.to_datetime(df_tx["transaction_date"]).dt.date
+    
+    # quantity를 숫자 타입으로 명시적 변환
+    df_tx["quantity"] = pd.to_numeric(df_tx["quantity"], errors="coerce").fillna(0)
+    
+    # ================================
+    # ✅ 통계 정보 계산 (한글화 전에 먼저 계산)
+    # ================================
+    total_buy = df_tx[df_tx["trade_type"] == "BUY"]["quantity"].sum() if "BUY" in df_tx["trade_type"].values else 0
+    total_sell = df_tx[df_tx["trade_type"] == "SELL"]["quantity"].sum() if "SELL" in df_tx["trade_type"].values else 0
+    
+    # 거래 타입 한글화 (통계 계산 후에 수행)
+    trade_type_kr_map = {
+        "BUY": "매수",
+        "SELL": "매도",
+        "DEPOSIT": "입금",
+        "WITHDRAW": "출금",
+    }
+    df_tx["trade_type_kr"] = df_tx["trade_type"].map(trade_type_kr_map).fillna(df_tx["trade_type"])
+    
+    # 계좌 정보 추출
+    if "accounts" in df_tx.columns:
+        df_tx["account_label"] = df_tx["accounts"].apply(
+            lambda x: f"{(x or {}).get('brokerage', '')} | {(x or {}).get('name', '')}".strip(" |") if x else ""
+        )
+        df_tx = df_tx.drop(columns=["accounts"], errors="ignore")
+    
+    # 표시용 컬럼 선택 및 순서 지정
+    display_columns = {
+        "transaction_date": "거래일",
+        "trade_type_kr": "거래구분",
+        "quantity": "수량/금액",
+        "price": "단가",
+        "fee": "수수료",
+        "tax": "세금",
+        "memo": "메모",
+        "account_label": "계좌",
+    }
+    
+    # 존재하는 컬럼만 선택
+    df_display = df_tx[[col for col in display_columns.keys() if col in df_tx.columns]].copy()
+    
+    # 컬럼명 한글화
+    df_display = df_display.rename(columns=display_columns)
+    
+    # ================================
+    # 통계 정보 표시
+    # ================================
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("총 매수 수량", f"{total_buy:,.2f}")
+    with col2:
+        st.metric("총 매도 수량", f"{total_sell:,.2f}")
+    with col3:
+        st.metric("순 보유 수량", f"{total_buy - total_sell:,.2f}")
+    
+    # 디버깅용 정보 (문제 해결 시 제거 가능)
+    # # with st.expander("🔍 통계 계산 디버깅 정보"):
+    # #     st.write(f"**총 거래 건수**: {len(df_tx)}")
+    # #     st.write(f"**trade_type 고유값**: {df_tx['trade_type'].unique().tolist()}")
+    # #     st.write(f"**BUY 거래 건수**: {(df_tx['trade_type'] == 'BUY').sum()}")
+    # #     st.write(f"**SELL 거래 건수**: {(df_tx['trade_type'] == 'SELL').sum()}")
+    # #     st.write(f"**총 매수 수량**: {total_buy:,.2f}")
+    # #     st.write(f"**총 매도 수량**: {total_sell:,.2f}")
+    # #     st.dataframe(df_tx[["transaction_date", "trade_type", "quantity"]].head(10))
+    # st.divider()
+    
+    # 거래 내역 테이블 표시
+    st.dataframe(df_display, width="stretch", height=400)
+    
+    st.caption(
+        "※ 이 자산에 대한 모든 거래 내역입니다. "
+        "메모를 통해 각 매수/매도의 이유를 확인할 수 있습니다."
+    )
+
+

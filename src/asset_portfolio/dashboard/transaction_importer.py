@@ -146,7 +146,7 @@ def _find_existing_duplicate(
         .eq("trade_type", trade_type)
         .eq("quantity", quantity)
         .eq("price", price)
-        .eq("tax", tax)
+        # .eq("tax", tax)   // 세금은 필터링 조건에서 제외
         .limit(1)
         .execute()
     )

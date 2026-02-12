@@ -17,6 +17,7 @@ from asset_portfolio.dashboard.render import (
     render_latest_snapshot_table,
     render_asset_grouping_pie_section,
     render_portfolio_trend_chart,
+    render_asset_transaction_history,  # 자산별 거래 내역 조회
 )
 from asset_portfolio.dashboard.transaction_editor import render_transaction_editor
 from asset_portfolio.dashboard.transaction_importer import render_transaction_importer
@@ -138,7 +139,7 @@ def render_main_dashboard():
     
     start_date, end_date = render_period_selector(user_id, account_id)
     
-    tab1, tab2, tab3 = st.tabs(["대시보드", "자산 분석", "거래 내역"])
+    tab1, tab2, tab3, tab4 = st.tabs(["대시보드", "자산 분석", "자산별 거래", "거래 내역"])
 
     with tab1:
         render_kpi_section(user_id, account_id, start_date, end_date)
@@ -161,6 +162,10 @@ def render_main_dashboard():
         render_asset_weight_section(user_id, account_id, start_date, end_date)
 
     with tab3:
+        # 보유 중인 자산별 거래 내역 조회
+        render_asset_transaction_history(user_id, account_id)
+
+    with tab4:
         render_transactions_table_section(user_id, account_id, start_date, end_date)
 
 
