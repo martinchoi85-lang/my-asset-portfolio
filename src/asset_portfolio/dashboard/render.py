@@ -4,6 +4,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
 from datetime import date, timedelta
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
 from asset_portfolio.backend.services.portfolio_weight_service import (
@@ -30,6 +31,7 @@ from asset_portfolio.backend.services.transaction_service import (
 )
 from asset_portfolio.backend.infra import query
 from asset_portfolio.dashboard.data import load_assets_lookup
+from asset_portfolio.backend.infra.query import fetch_all_pagination, load_asset_prices
 
 
 @st.cache_data(ttl=600)
@@ -499,7 +501,7 @@ def render_asset_return_section(
         user_id=user_id,
         account_id=account_id,
     )
-    data = q.execute().data or []
+    data = fetch_all_pagination(q)
 
     if not data:
         st.info("자산별 수익률 데이터가 없습니다.")
@@ -575,12 +577,76 @@ def render_asset_return_section(
     # ============================
     # 6. 차트 출력
     # ============================
+    # ============================
+    # 6. 차트 출력 (Dual Axis: 수익률(L) vs 가격(R))
+    # ============================
     asset_df["date"] = pd.to_datetime(asset_df["date"]).dt.date  # 시간 제거
-    st.line_chart(
-        asset_df.set_index("date")["return_rate"],
-        height=300,
-        width='stretch'
+    
+    # 가격 데이터 조회
+    price_rows = load_asset_prices(selected_asset_id, start_date, end_date)
+    price_df = pd.DataFrame(price_rows)
+    
+    # 가격 데이터 전처리 & 병합
+    if not price_df.empty:
+        price_df["date"] = pd.to_datetime(price_df["price_date"]).dt.date
+        price_df.rename(columns={"close_price": "price"}, inplace=True)
+        # 필요한 컬럼만 남기고 병합
+        combined_df = pd.merge(
+            asset_df, 
+            price_df[["date", "price", "currency"]], 
+            on="date", 
+            how="left"
+        )
+    else:
+        combined_df = asset_df.copy()
+        combined_df["price"] = None
+
+    # Plotly Dual Axis Chart 생성
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # 1) 수익률 (Left Y)
+    fig.add_trace(
+        go.Scatter(
+            x=combined_df["date"],
+            y=combined_df["return_rate"] * 100, # % 단위
+            name="수익률(%)",
+            mode="lines",
+            line=dict(color="#2962FF", width=2),
+        ),
+        secondary_y=False,
     )
+
+    # 2) 자산 가격 (Right Y) - 데이터 있을 경우만
+    if not price_df.empty:
+        # 통화 정보 확인 (첫 행 기준)
+        curr = price_df["currency"].iloc[0].upper() if "currency" in price_df.columns and price_df["currency"].iloc[0] else ""
+        price_label = f"자산 가격({curr})" if curr else "자산 가격"
+        
+        fig.add_trace(
+            go.Scatter(
+                x=combined_df["date"],
+                y=combined_df["price"],
+                name=price_label,
+                mode="lines",
+                line=dict(color="#FF6D00", width=2, dash="dot"), # 점선 등 스타일 차별화
+            ),
+            secondary_y=True,
+        )
+        fig.update_yaxes(title_text=price_label, secondary_y=True, showgrid=False)
+
+    # Layout 설정
+    fig.update_layout(
+        title=f"{selected_asset_label} 수익률 및 가격 추이",
+        height=400,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=10, r=10, t=50, b=10),
+    )
+    
+    fig.update_yaxes(title_text="수익률(%)", secondary_y=False)
+    
+    # Streamlit에 표시
+    st.plotly_chart(fig, use_container_width=True)
 
     # ============================
     # 7. 테이블 (확인용)
@@ -1122,7 +1188,7 @@ def render_asset_contribution_stacked_area(
     df["cum_contribution_pct"] = df["cum_contribution"] * 100
 
     # 너무 많은 자산이면 상위 N개만 (UX 보호)
-    top_n = st.slider("표시할 자산 개수(상위 누적 기여도 기준)", 5, 30, 12)
+    top_n = st.slider("표시할 자산 개수(상위 누적 기여도 기준)", 5, 30, 6)
 
     latest_cum = (
         df.groupby(["asset_id", "name_kr"], as_index=False)["cum_contribution"]
@@ -1790,7 +1856,8 @@ def render_asset_transaction_history(user_id: str, account_id: str):
     # ================================
     # ✅ 통계 정보 계산 (한글화 전에 먼저 계산)
     # ================================
-    total_buy = df_tx[df_tx["trade_type"] == "BUY"]["quantity"].sum() if "BUY" in df_tx["trade_type"].values else 0
+    # BUY와 INIT(초기입고)을 합산하여 총 매수로 취급
+    total_buy = df_tx[df_tx["trade_type"].isin(["BUY", "INIT"])]["quantity"].sum()
     total_sell = df_tx[df_tx["trade_type"] == "SELL"]["quantity"].sum() if "SELL" in df_tx["trade_type"].values else 0
     
     # 거래 타입 한글화 (통계 계산 후에 수행)
@@ -1799,6 +1866,7 @@ def render_asset_transaction_history(user_id: str, account_id: str):
         "SELL": "매도",
         "DEPOSIT": "입금",
         "WITHDRAW": "출금",
+        "INIT": "초기입고",
     }
     df_tx["trade_type_kr"] = df_tx["trade_type"].map(trade_type_kr_map).fillna(df_tx["trade_type"])
     

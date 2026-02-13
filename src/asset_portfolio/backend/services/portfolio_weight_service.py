@@ -1,7 +1,7 @@
 from __future__ import annotations
 import pandas as pd
 from typing import Dict, List, Optional
-from asset_portfolio.backend.infra.query import build_daily_snapshots_query
+from asset_portfolio.backend.infra.query import build_daily_snapshots_query, fetch_all_pagination
 from asset_portfolio.backend.services.fx_service import FxService
 from asset_portfolio.backend.services.data_contracts import (
     normalize_weight_df,
@@ -27,8 +27,8 @@ def load_asset_weight_timeseries(
         user_id=user_id,
         account_id=account_id,
     )
-    response = query.order("date").execute()
-    return response.data or []
+    rows = fetch_all_pagination(query.order("date"))
+    return rows
 
 
 def build_asset_weight_df(rows: List[Dict]) -> pd.DataFrame:
@@ -136,7 +136,7 @@ def load_latest_asset_weights(user_id: str, account_id: str, start_date: str, en
         account_id=account_id,
     )
 
-    rows = query.execute().data or []
+    rows = fetch_all_pagination(query)
     if not rows:
         return normalize_latest_weight_df(pd.DataFrame())
 

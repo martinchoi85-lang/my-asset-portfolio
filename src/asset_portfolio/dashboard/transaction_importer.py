@@ -158,13 +158,13 @@ def _render_required_fields_table(field_rows: List[Dict[str, str]]) -> None:
     st.dataframe(pd.DataFrame(field_rows))
 
 
-def _render_account_reference_table() -> None:
-    accounts_df = _load_accounts_df()
+def _render_account_reference_table(user_id: str) -> None:
+    accounts_df = _load_accounts_df(user_id)
     if accounts_df.empty:
         st.warning("등록된 계좌가 없습니다. 계좌를 먼저 등록하세요.")
         return
     st.markdown("#### ✅ 현재 등록된 계좌 목록")
-    display_df = accounts_df[["brokerage", "name", "type", "owner"]].copy()
+    display_df = accounts_df[["brokerage", "name", "type", "old_owner"]].copy()
     display_df.rename(
         columns={
             "brokerage": "증권사",
@@ -177,9 +177,9 @@ def _render_account_reference_table() -> None:
     st.dataframe(display_df, width='stretch')
 
 
-def _get_latest_transaction_dates() -> pd.DataFrame:
+def _get_latest_transaction_dates(user_id: str) -> pd.DataFrame:
     """계좌별 최근 거래일을 조회해 중복 입력을 예방하도록 돕는다."""
-    accounts_df = _load_accounts_df()
+    accounts_df = _load_accounts_df(user_id)
     if accounts_df.empty:
         return pd.DataFrame()
 
@@ -218,10 +218,10 @@ def _read_uploaded_file(uploaded_file) -> Optional[pd.DataFrame]:
     return None
 
 
-def _prepare_trade_rows(df: pd.DataFrame) -> Tuple[List[PreparedTransaction], List[str]]:
+def _prepare_trade_rows(df: pd.DataFrame, user_id: str) -> Tuple[List[PreparedTransaction], List[str]]:
     errors: List[str] = []
     prepared: List[PreparedTransaction] = []
-    accounts_df = _load_accounts_df()
+    accounts_df = _load_accounts_df(user_id)
     assets_df = _load_assets_df()
 
     seen_keys = set()
@@ -342,10 +342,10 @@ def _prepare_trade_rows(df: pd.DataFrame) -> Tuple[List[PreparedTransaction], Li
     return prepared, errors
 
 
-def _prepare_dividend_rows(df: pd.DataFrame) -> Tuple[List[PreparedTransaction], List[str]]:
+def _prepare_dividend_rows(df: pd.DataFrame, user_id: str) -> Tuple[List[PreparedTransaction], List[str]]:
     errors: List[str] = []
     prepared: List[PreparedTransaction] = []
-    accounts_df = _load_accounts_df()
+    accounts_df = _load_accounts_df(user_id)
 
     seen_keys = set()
 
@@ -505,10 +505,10 @@ def render_transaction_importer(user_id: str) -> None:
             ])
 
     with st.expander("📌 등록된 계좌 확인", expanded=False):
-        _render_account_reference_table()
+        _render_account_reference_table(user_id)
 
     with st.expander("📌 계좌별 최근 거래일", expanded=False):
-        latest_df = _get_latest_transaction_dates()
+        latest_df = _get_latest_transaction_dates(user_id)
         if latest_df.empty:
             st.info("최근 거래일 정보를 불러올 수 없습니다.")
         else:
@@ -575,9 +575,9 @@ def render_transaction_importer(user_id: str) -> None:
         auto_cash = st.checkbox("BUY/SELL 시 CASH 자동 반영", value=True)
 
     if import_type == "매매 내역":
-        prepared, errors = _prepare_trade_rows(mapped_df)
+        prepared, errors = _prepare_trade_rows(mapped_df, user_id)
     else:
-        prepared, errors = _prepare_dividend_rows(mapped_df)
+        prepared, errors = _prepare_dividend_rows(mapped_df, user_id)
 
     if errors:
         st.error("업로드 오류가 발견되어 전체 업로드가 취소되었습니다.")

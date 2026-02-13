@@ -72,7 +72,7 @@ def render_snapshot_editor(user_id: str):
     if "snap_busy" not in st.session_state:
         st.session_state["snap_busy"] = False
 
-    acc_df = _load_accounts_df()
+    acc_df = _load_accounts_df(user_id)
     if acc_df.empty:
         st.warning("accounts 데이터가 없습니다.")
         return

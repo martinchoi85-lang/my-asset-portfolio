@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import date, datetime
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
 
@@ -82,8 +82,7 @@ def load_asset_contribution_data(
         user_id=user_id,
         account_id=account_id,
     )
-    response = query.order("date").execute()
-    return response.data or []
+    return fetch_all_pagination(query.order("date"))
 
 
 def get_transactions(user_id: str) -> List[dict]:
@@ -113,3 +112,46 @@ def get_assets() -> List[dict]:
     supabase = get_supabase_client()
     response = supabase.table("assets").select("*").execute()
     return response.data or []
+
+
+
+
+def load_asset_prices(asset_id: int, start_date: str, end_date: str) -> List[dict]:
+    """특정 자산의 가격 데이터를 조회합니다."""
+    supabase = get_supabase_client()
+    q = (
+        supabase.table("asset_prices")
+        .select("price_date, close_price, currency")
+        .eq("asset_id", asset_id)
+        .order("price_date")
+    )
+
+    if start_date:
+        q = q.gte("price_date", _as_date_str(start_date))
+    if end_date:
+        q = q.lte("price_date", _as_date_str(end_date))
+        
+    return fetch_all_pagination(q)
+
+
+def fetch_all_pagination(query_builder: Any, batch_size: int = 1000) -> List[dict]:
+    """
+    Supabase 1000행 제한을 우회하기 위한 페이지네이션 헬퍼.
+    query_builder는 .select()까지 완료된 상태여야 함.
+    """
+    all_rows = []
+    start = 0
+    while True:
+        # .range(start, end)는 inclusive index
+        end = start + batch_size - 1
+        response = query_builder.range(start, end).execute()
+        rows = response.data or []
+        
+        all_rows.extend(rows)
+        
+        if len(rows) < batch_size:
+            break
+            
+        start += batch_size
+        
+    return all_rows

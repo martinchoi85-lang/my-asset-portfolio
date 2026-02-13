@@ -1,7 +1,7 @@
 # src/asset_portfolio/backend/services/portfolio_service.py
 import pandas as pd
 from typing import List, Dict
-from asset_portfolio.backend.infra.query import build_daily_snapshots_query
+from asset_portfolio.backend.infra.query import build_daily_snapshots_query, fetch_all_pagination
 from asset_portfolio.backend.services.portfolio_calculator import (
     calculate_asset_return_series_from_snapshots, calculate_portfolio_return_series_from_snapshots,
 )
@@ -43,7 +43,7 @@ def get_asset_return_series(
         account_id=account_id,
     )
 
-    snapshots = query.execute().data or []
+    snapshots = fetch_all_pagination(query)
 
     # calculator는 DB를 모른다
     return calculate_asset_return_series_from_snapshots(snapshots)
@@ -68,7 +68,7 @@ def load_portfolio_daily_snapshots(
         account_id=account_id,
     )
 
-    snapshots = query.execute().data or []
+    snapshots = fetch_all_pagination(query)
     
     # =========================
     # date 기준으로 합산
