@@ -18,6 +18,7 @@ from asset_portfolio.dashboard.render import (
     render_asset_grouping_pie_section,
     render_portfolio_trend_chart,
     render_asset_transaction_history,  # 자산별 거래 내역 조회
+    render_period_performance_section, # 기간별 성과 분석
 )
 from asset_portfolio.dashboard.transaction_editor import render_transaction_editor
 from asset_portfolio.dashboard.transaction_importer import render_transaction_importer
@@ -151,6 +152,8 @@ def render_main_dashboard():
         render_portfolio_treemap(user_id, account_id, start_date, end_date)
 
     with tab2:
+        render_period_performance_section(user_id, account_id, start_date, end_date)
+        st.divider()
         render_asset_grouping_pie_section(user_id, account_id)
         st.divider()
         render_benchmark_comparison_section(user_id, account_id, start_date, end_date)

@@ -155,3 +155,39 @@ def fetch_all_pagination(query_builder: Any, batch_size: int = 1000) -> List[dic
         start += batch_size
         
     return all_rows
+
+
+def get_period_cash_flow(user_id: str, account_id: str, start_date: str, end_date: str) -> List[dict]:
+    """
+    특정 기간의 입출금(DEPOSIT, WITHDRAW) 내역을 조회합니다.
+    """
+    supabase = get_supabase_client()
+    
+    q = (
+        supabase.table("transactions")
+        .select("transaction_date, trade_type, quantity, price, asset_id")
+        .in_("trade_type", ["DEPOSIT", "WITHDRAW"])
+        .order("transaction_date")
+    )
+
+    if start_date:
+        q = q.gte("transaction_date", _as_date_str(start_date))
+    if end_date:
+        # transaction_date는 timestamp이므로 해당 날짜의 끝까지 포함하려면 다음날 0시 직전까지로 해야 하지만,
+        # 편의상 _as_date_str로 yyyy-mm-dd 만 비교하면 해당 일자 00:00:00 기준이 됨.
+        # 정확히는 .lte("transaction_date", f"{end_date}T23:59:59") 가 맞으나,
+        # 현재 시스템에서 날짜 필터링 규칙 통일을 위해 _as_date_str 사용.
+        # (필요 시 수정)
+        q = q.lte("transaction_date", f"{_as_date_str(end_date)}T23:59:59")
+
+    if account_id and account_id != ALL_ACCOUNT_TOKEN:
+        q = q.eq("account_id", account_id)
+    else:
+        user_accounts = get_accounts(user_id)
+        user_account_ids = [acc['id'] for acc in user_accounts]
+        if not user_account_ids:
+            return []
+        q = q.in_("account_id", user_account_ids)
+
+    return fetch_all_pagination(q)
+

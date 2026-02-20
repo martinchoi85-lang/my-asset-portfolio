@@ -313,6 +313,67 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
     c4.metric("누적 수익률", f"{portfolio_return_pct:.2f}%")
 
 
+def render_period_performance_section(user_id: str, account_id: str, start_date: str, end_date: str):
+    """
+    기간별 성과 분석 (Cash Flow 고려)
+    """
+    from asset_portfolio.backend.services.portfolio_service import calculate_period_performance
+    
+    st.subheader(f"🗓️ 기간별 성과 ({start_date} ~ {end_date})")
+
+    if not account_id:
+        return
+
+    # 데이터 계산
+    res = calculate_period_performance(user_id, account_id, start_date, end_date)
+    
+    start_val = res["start_value"]
+    end_val = res["end_value"]
+    net_flow = res["net_flow"]
+    inv_gain = res["investment_gain"]
+    ret_rate = res["return_rate"] * 100
+
+    # Layout
+    c1, c2, c3, c4, c5 = st.columns(5)
+    
+    c1.metric(
+        "기초 자산 (Start)", 
+        f"{start_val:,.0f}",
+        help="선택한 기간의 시작 시점 자산 총액"
+    )
+    
+    c2.metric(
+        "순입출금 (Net Flow)", 
+        f"{net_flow:,.0f}",
+        delta=None, # 입출금은 좋고 나쁨이 아님
+        help="기간 내 (입금 - 출금) 총액"
+    )
+    
+    # 투자 손익: 색상 표시 (Streamlit metric delta 활용)
+    c3.metric(
+        "투자 손익 (Gain)", 
+        f"{inv_gain:,.0f}",
+        delta=f"{inv_gain:,.0f}",
+        help="순수 투자로 발생한 이익/손실 (기말 - 기초 - 순입출금)"
+    )
+    
+    c4.metric(
+        "기간 수익률 (Return)", 
+        f"{ret_rate:.2f}%",
+        delta=f"{ret_rate:.2f}%",
+        help="기간 내 평균 자산 대비 수익률 (Modified Dietz 방식)"
+    )
+    
+    c5.metric(
+        "기말 자산 (End)", 
+        f"{end_val:,.0f}",
+        help="선택한 기간의 종료 시점 자산 총액"
+    )
+    
+    st.caption("※ 기간 수익률은 입출금을 고려하여 계산된 '순수 투자 성과' 입니다. (단순 수익률과 다를 수 있음)")
+
+
+
 def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str, end_date: str):
     st.subheader("📈 자산 추세 (Trend)")
     
@@ -646,7 +707,7 @@ def render_asset_return_section(
     fig.update_yaxes(title_text="수익률(%)", secondary_y=False)
     
     # Streamlit에 표시
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # ============================
     # 7. 테이블 (확인용)

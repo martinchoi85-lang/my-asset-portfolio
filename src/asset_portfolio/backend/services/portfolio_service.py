@@ -10,6 +10,8 @@ from asset_portfolio.backend.services.data_contracts import (
     normalize_contribution_df,
     CONTRIBUTION_COLUMNS,
 )
+from asset_portfolio.backend.infra import query
+from datetime import datetime, date
 
 """
 portfolio_service.py
@@ -171,3 +173,104 @@ def calculate_asset_contributions(
             ]
         ]
     )
+
+
+def calculate_period_performance(
+    user_id: str,
+    account_id: str,
+    start_date: str,
+    end_date: str,
+) -> Dict[str, float]:
+    """
+    기간별 성과 분석 (Cash Flow 고려)
+    
+    Returns:
+        {
+            "start_value": float,
+            "end_value": float,
+            "net_flow": float,     # 입금 - 출금
+            "investment_gain": float, # 기말 - 기초 - 순입출금
+            "return_rate": float,   # Modified Dietz or Simple Return
+        }
+    """
+    
+    # 0. Data Fetching
+    snapshots = load_portfolio_daily_snapshots(user_id, account_id, start_date, end_date)
+    if not snapshots:
+        return {
+            "start_value": 0.0,
+            "end_value": 0.0,
+            "net_flow": 0.0,
+            "investment_gain": 0.0,
+            "return_rate": 0.0,
+        }
+    
+    # 1. Start / End Value
+    # snapshots는 날짜 오름차순 정렬되어 있음
+    start_row = snapshots[0]
+    end_row = snapshots[-1]
+    
+    start_val = float(start_row["valuation_amount"] or 0)
+    end_val = float(end_row["valuation_amount"] or 0)
+    
+    # 2. Cash Flow
+    # start_date < date <= end_date 범위의 입출금 합산
+    s_date_obj = None
+    if isinstance(start_row["date"], str):
+        s_date_obj = datetime.strptime(start_row["date"], "%Y-%m-%d").date()
+    else:
+        s_date_obj = start_row["date"]
+        
+    e_date_obj = None
+    if isinstance(end_row["date"], str):
+        e_date_obj = datetime.strptime(end_row["date"], "%Y-%m-%d").date()
+    else:
+        e_date_obj = end_row["date"]
+
+    
+    raw_flows = query.get_period_cash_flow(user_id, account_id, start_date, end_date)
+    
+    net_flow = 0.0
+    
+    # 입출금 내역이 기간 내에 포함되는지 확인
+    # - start_date의 스냅샷은 해당일 EOD 기준이므로, start_date 당일 입출금은 이미 반영됨 => 제외
+    # - end_date의 스냅샷은 해당일 EOD 기준이므로, end_date 당일 입출금은 반영됨 => 포함
+    for row in raw_flows:
+        td_str = row["transaction_date"]
+        if "T" in td_str:
+            td = datetime.fromisoformat(td_str).date()
+        else:
+            td = datetime.strptime(td_str[:10], "%Y-%m-%d").date()
+            
+        if td <= s_date_obj:
+            continue
+        if td > e_date_obj:
+            continue
+            
+        q = float(row["quantity"] or 0)
+        t_type = row["trade_type"]
+        
+        if t_type == "DEPOSIT":
+            net_flow += q
+        elif t_type == "WITHDRAW":
+            net_flow -= q
+            
+    # 3. Investment Gain & Return
+    investment_gain = end_val - start_val - net_flow
+    
+    # Modified Dietz (약식): Gain / (Start + Flow/2)
+    denominator = start_val + (net_flow / 2.0)
+    
+    if denominator == 0:
+        return_rate = 0.0
+    else:
+        return_rate = investment_gain / denominator
+
+    return {
+        "start_value": start_val,
+        "end_value": end_val,
+        "net_flow": net_flow,
+        "investment_gain": investment_gain,
+        "return_rate": return_rate,
+    }
+
