@@ -29,11 +29,10 @@
     - 기간 설정 (1M, 3M, 6M, 1Y, YTD, All)
 
 ### 2. 🗓️ 기간별 성과 분석 (Period Analysis)
-- **목표**: 특정 기간 동안의 자산 증감 분석
-- **상세**:
-    - 기간 선택기(Date Range Picker) 도입
-    - `Start Date` vs `End Date`의 Net Worth 비교
-    - 해당 기간 동안의 입출금(Cash Flow) 반영하여 실제 투자 손익 추정
+- **[x] 완료**: 특정 기간 동안의 자산 증감 분석 기능 구현
+    - [x] 기간 선택기(Date Range Picker) 도입
+    - [x] `Start Date` vs `End Date`의 Net Worth 비교
+    - [x] 해당 기간 동안의 입출금(Cash Flow) 반영하여 실제 투자 손익 추정 (Modified Dietz)
 
 ### 3. 💰 실현손익(Realized P&L) 계산
 - **목표**: 매도 확정된 손익을 정확히 계산
@@ -43,11 +42,10 @@
     - `realized_gains` 테이블 또는 `transactions` 테이블에 컬럼 추가 검토
 
 ### 4. 🧩 동적 그룹화 차트 개선 (Dynamic Grouping)
-- **목표**: 다양한 카테고리 기준으로 자산 현황 조회
-- **상세**:
-    - 기존 도넛 차트/트리맵 강화
-    - Group By 옵션 다양화: 자산군(Type), 통화(Currency), 섹터(Sector), 지역(Region), 계좌(Account) 등
-    - Drill-down 기능 (예: 주식 -> 미국주식 -> 기술주)
+- **[x] 완료**: 다양한 카테고리 기준으로 자산 현황 조회 (1차 구현)
+    - [x] 기존 도넛 차트/트리맵 강화
+    - [x] Group By 옵션 다양화: 자산군(Type), 통화(Currency), 시장(Market) 등
+    - [ ] Drill-down 기능 (예: 주식 -> 미국주식 -> 기술주) (추후 과제)
 
 ### 5. 🔍 TDF/펀드 세부 자산 분해 (Look-through)
 - **목표**: ETF/펀드 내의 실제 보유 자산까지 분석

@@ -19,6 +19,7 @@ from asset_portfolio.dashboard.render import (
     render_portfolio_trend_chart,
     render_asset_transaction_history,  # 자산별 거래 내역 조회
     render_period_performance_section, # 기간별 성과 분석
+    render_asset_contribution_stacked_area
 )
 from asset_portfolio.dashboard.transaction_editor import render_transaction_editor
 from asset_portfolio.dashboard.transaction_importer import render_transaction_importer
@@ -48,8 +49,16 @@ def _inject_mobile_redirect():
           if (window.location.search.includes("no_mobile_redirect=1")) return;
 
           const base = "{mobile_url}".replace(/\\/$/, "");
-          const target = base + "/?from=streamlit";
-          window.location.replace(target);
+          const target = base + "/"; // Streamlit Cloud might not like query params initially or we just go to root
+          
+          // Streamlit component runs in an iframe. We need to redirect the top window.
+          try {{
+              window.top.location.href = target;
+          }} catch(e) {{
+              // Fallback if cross-origin rules block top navigation (unlikely for simple redirects but possible)
+              console.error("Top navigation failed:", e);
+              window.location.href = target;
+          }}
         }})();
         </script>
         """
@@ -87,14 +96,29 @@ def render_main_dashboard():
             del st.session_state.user
             st.rerun()
 
-        page = st.sidebar.radio(
-            "화면 선택",
-            ["자산 종합/분석", "거래내역 수정", "정기매수 관리", "자산가격 업데이트", "자산 정보 수정", "스냅샷 수정", "Transaction Importer"],
-            index=0,
-        )
+        # 기능 그룹화
+        menu_items = {
+            "🏠 대시보드": ["대시보드"],
+            "✍️ 거래 관리": ["거래내역 입력", "정기매수 관리", "거래내역 업로드"],
+            "💼 자산 관리": ["자산 정보 수정", "자산가격 업데이트"],
+            "🛠️ 시스템 관리": ["스냅샷 수정"],
+        }
+        
+        # 1. 메인 카테고리 선택
+        selected_category = st.selectbox("메뉴 그룹", list(menu_items.keys()))
+        
+        # 2. 서브 메뉴 선택
+        # "대시보드" 처럼 서브메뉴가 1개인 경우 바로 선택된 것으로 처리하거나,
+        # 숨기고 싶다면 radio를 조건부로 보여줄 수 있음.
+        # 여기서는 직관성을 위해 항상 radio를 보여주되, 선택지가 1개면 그것이 선택됨.
+        sub_options = menu_items[selected_category]
+        if len(sub_options) == 1:
+            page = sub_options[0]
+        else:
+            page = st.radio("기능 선택", sub_options)
 
     # --- Page Routing ---
-    if page == "거래내역 수정":
+    if page == "거래내역 입력":
         render_transaction_editor(user_id=user_id)
         st.stop()
     if page == "정기매수 관리":
@@ -109,11 +133,11 @@ def render_main_dashboard():
     if page == "스냅샷 수정":
         render_snapshot_editor(user_id=user_id)
         st.stop()
-    if page == "Transaction Importer":
+    if page == "거래내역 업로드":
         render_transaction_importer(user_id=user_id)
         st.stop()
 
-    # --- Main Dashboard Content ---
+    # --- Main Dashboard Content (page == "대시보드") ---
     portfolio_title = "지온이의 포트폴리오" if username == "지온이" else "승엽&민희 자산 포트폴리오"
     
     mobile_url = os.environ.get("MOBILE_URL")
@@ -140,35 +164,64 @@ def render_main_dashboard():
     
     start_date, end_date = render_period_selector(user_id, account_id)
     
-    tab1, tab2, tab3, tab4 = st.tabs(["대시보드", "자산 분석", "자산별 거래", "거래 내역"])
+    # 탭 재구성: 요약 / 성과 / 이력
+    tab1, tab2, tab3 = st.tabs(["🏠 요약 (Overview)", "📈 성과 (Performance)", "📜 이력 (History)"])
 
     with tab1:
+        st.caption("현재 자산 상태 요약")
+        # 1. KPI (기존 대시보드 상단)
         render_kpi_section(user_id, account_id, start_date, end_date)
         st.divider()
-        render_portfolio_trend_chart(user_id, account_id, start_date, end_date)
-        st.divider()
+        
+        # 2. 보유 종목 리스트 (Snapshot Table)
         render_latest_snapshot_table(user_id, account_id)
         st.divider()
-        render_portfolio_treemap(user_id, account_id, start_date, end_date)
+        
+        # 3. 자산 비중 (Pie + Bar)
+        c1, c2 = st.columns(2)
+        with c1:
+            render_asset_grouping_pie_section(user_id, account_id)
+        with c2:
+            # st.subheader("📊 자산 비중 상세")
+            render_asset_weight_section(user_id, account_id, start_date, end_date)
 
     with tab2:
+        st.caption("기간별 투자 성과 분석")
+        # 1. 기간별 성과 요약 (Period Analysis)
         render_period_performance_section(user_id, account_id, start_date, end_date)
         st.divider()
-        render_asset_grouping_pie_section(user_id, account_id)
+
+        # 2. 총자산 추세 (Trend Chart)
+        render_portfolio_trend_chart(user_id, account_id, start_date, end_date)
         st.divider()
+
+        # 3. 벤치마크 비교
         render_benchmark_comparison_section(user_id, account_id, start_date, end_date)
         st.divider()
-        render_asset_contribution_section_full(user_id, account_id, start_date, end_date)
+
+        # 4. 수익 기여도 & 자산별 수익률
+        t2_c1, t2_c2 = st.columns(2)
+        with t2_c1:
+            render_asset_contribution_section_full(user_id, account_id, start_date, end_date)
+        with t2_c2:
+            render_asset_return_section(user_id, account_id, start_date, end_date)
+            
         st.divider()
-        render_asset_return_section(user_id, account_id, start_date, end_date)
+
+        # 5. 누적 기여도 (Stacked Area)
+        render_asset_contribution_stacked_area(user_id, account_id, start_date, end_date)
+
         st.divider()
-        render_asset_weight_section(user_id, account_id, start_date, end_date)
+
+        # 6. 트리맵
+        render_portfolio_treemap(user_id, account_id, start_date, end_date)
 
     with tab3:
-        # 보유 중인 자산별 거래 내역 조회
+        st.caption("전체 거래 내역")
+        # 1. 자산별 거래 내역 조회
         render_asset_transaction_history(user_id, account_id)
-
-    with tab4:
+        st.divider()
+        # 2. 전체 거래 내역 테이블
         render_transactions_table_section(user_id, account_id, start_date, end_date)
 
 

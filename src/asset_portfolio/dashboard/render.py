@@ -248,19 +248,21 @@ def render_asset_grouping_pie_section(user_id: str, account_id: str):
     display_df = grouped_df.copy()
     display_df[group_key] = display_df["display_label"] # 맵핑된 한글 적용
     
+    # 컬럼명 변경
+    view_df = display_df[[group_key, "total_valuation_amount"]].rename(
+        columns={
+            group_key: "분류 기준",
+            "total_valuation_amount": "평가금액 합계",
+        }
+    )
+    
     st.dataframe(
-        display_df[[group_key, "total_valuation_amount"]].rename(
-            columns={
-                group_key: "분류 기준",
-                "total_valuation_amount": "평가금액 합계",
-            }
-        ),
+        view_df.style.format({"평가금액 합계": "{:,.0f}"}),
         width='stretch',
         hide_index=True,
         column_config={
             "평가금액 합계": st.column_config.NumberColumn(
-                "평가금액 합계(₩)",
-                format="%d",  # 소수점 제거
+                "평가금액 합계(₩)"
             )
         }
     )
@@ -423,6 +425,7 @@ def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str,
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="left", x=0),
     )
+
     # rangemode="normal"은 기본적으로 데이터 범위에 맞춤 (0 강제 안함)
     fig.update_yaxes(
         title_text="금액 (KRW)", 
@@ -435,7 +438,7 @@ def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str,
 
 
 def render_benchmark_comparison_section(user_id: str, account_id: str, start_date: str, end_date: str):
-    st.subheader("벤치마크(S&P500)와 수익률 비교")
+    st.subheader("📈 벤치마크(S&P500)와 수익률 비교")
 
     if not account_id:
         st.info("계좌를 선택해 주세요.")
@@ -1161,10 +1164,19 @@ def render_asset_weight_section(user_id: str, account_id: str, start_date: str, 
     )
     
     fig.update_layout(
-        height=400,
-        margin=dict(t=40, l=10, r=10, b=10),
+        height=650,
+        margin=dict(t=40, l=10, r=10, b=10), # Legend is handled by automargin if not absolute? 
+        # Actually user wants bottom. 
+        # Using relative position y < 0.
         hovermode="x unified",
-        yaxis_title="비중(%)"
+        yaxis_title="비중(%)",
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.15, 
+            xanchor="center", 
+            x=0.5
+        )
     )
     # y축 범위: Top 1~10이면 0~100 고정, 그 외에는 데이터에 맞게 자동 (작은 비중도 잘 보이게)
     if page_idx == 0:
@@ -1173,13 +1185,13 @@ def render_asset_weight_section(user_id: str, account_id: str, start_date: str, 
     st.plotly_chart(fig, width='stretch')
 
     st.caption(
-        "※ 내 전체 자산(KRW 환산 기준)에서 각 자산이 차지하는 비율(%)이 시간에 따라 어떻게 변했는지를 보여줍니다."
+        "※ 내 전체 자산(KRW 환산 기준)에서 각 자산이 차지하는 비율(%)이 시간에 따라 어떻게 변했는지를 보여줍니다.\n"
         "특정 자산 가격이 급등하거나, 추가 매수를 했을 때 비중 영역이 커지는 것을 볼 수 있습니다. (리밸런싱 참고용)"
     )
 
 
-    with st.expander("📄 디버깅: weight 원본"):
-        st.dataframe(df_filtered.sort_values(["date", weight_col], ascending=[True, False]).head(200))
+    # with st.expander("📄 디버깅: weight 원본"):
+    #     st.dataframe(df_filtered.sort_values(["date", weight_col], ascending=[True, False]).head(200))
 
 
 def render_asset_contribution_section(
@@ -1502,29 +1514,22 @@ def render_asset_contribution_section_full(
 
     st.caption("※ 누적 기여도는 ‘전일 포트폴리오 평가금액 대비 일간 기여도’를 누적한 값입니다.")
 
-    st.divider()
-
-    # =========================
-    # 4) Stacked Area (누적 기여도)
-    # =========================
-    render_asset_contribution_stacked_area(user_id, account_id, start_date, end_date)
-
     # =========================
     # 5) 디버깅/검증용 테이블
     # =========================
-    with st.expander("📄 기여도 계산 결과(자산별 누적) 확인"):
-        st.dataframe(
-            latest.rename(columns={
-                "cum_contribution_pct": "누적기여도(%)",
-                "name_kr": "자산명",
-                "market": "시장",
-                "asset_type": "유형",
-            })[
-                ["자산명", "시장", "유형", "누적기여도(%)"]
-            ],
-            height=400,
-            width='stretch'
-        )
+    # with st.expander("📄 기여도 계산 결과(자산별 누적) 확인"):
+    #     st.dataframe(
+    #         latest.rename(columns={
+    #             "cum_contribution_pct": "누적기여도(%)",
+    #             "name_kr": "자산명",
+    #             "market": "시장",
+    #             "asset_type": "유형",
+    #         })[
+    #             ["자산명", "시장", "유형", "누적기여도(%)"]
+    #         ],
+    #         height=400,
+    #         width='stretch'
+    #     )
 
 
 def render_transactions_table_section(user_id: str, account_id: str, start_date: str, end_date: str):
