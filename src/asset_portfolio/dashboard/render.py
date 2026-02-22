@@ -269,6 +269,9 @@ def render_asset_grouping_pie_section(user_id: str, account_id: str):
     
     
 def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date: str):
+    from asset_portfolio.backend.services.fx_service import FxService
+    from asset_portfolio.backend.infra.query import build_daily_snapshots_query, fetch_all_pagination
+
     st.subheader("📈 Portfolio 전체 수익률")
 
     if not account_id:
@@ -276,7 +279,7 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
         return
 
     # =========================
-    # 1) 포트폴리오 시계열 (Cached)
+    # 1) 포트폴리오 시계열 (누적 수익률 계산용 — 기존 로직 유지)
     # =========================
     @st.cache_data(ttl=600)
     def _load_portfolio_series(u_id, acc_id, s_date, e_date):
@@ -288,31 +291,90 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
         st.warning("조회된 데이터가 없습니다.")
         return
 
-    # =========================
-    # 4) KPI 요약 카드
-    # =========================
-    # portfolio_return이 NaN인 경우가 있을 수 있으니, 마지막 유효값 기준으로 계산
+    # 누적 수익률(%)은 기존 시계열 데이터 그대로 사용
     pf_valid = portfolio_df.dropna(subset=["portfolio_return"]).copy()
-
     if not pf_valid.empty:
-        last = pf_valid.sort_values("date").iloc[-1]
-        total_val = float(last["valuation_amount"])
-        total_buy = float(last["purchase_amount"])
-        pnl = total_val - total_buy
-        pnl_rate = (pnl / total_buy * 100) if total_buy > 0 else 0.0
-        portfolio_return_pct = float(last["portfolio_return"]) * 100
+        portfolio_return_pct = float(pf_valid.sort_values("date").iloc[-1]["portfolio_return"]) * 100
     else:
-        total_val = float(portfolio_df["valuation_amount"].dropna().iloc[-1]) if portfolio_df["valuation_amount"].notna().any() else 0.0
-        total_buy = float(portfolio_df["purchase_amount"].dropna().iloc[-1]) if portfolio_df["purchase_amount"].notna().any() else 0.0
-        pnl = total_val - total_buy
-        pnl_rate = (pnl / total_buy * 100) if total_buy > 0 else 0.0
         portfolio_return_pct = 0.0
 
+    # =========================
+    # 2) 환율 조회 (USD → KRW)
+    # =========================
+    # yfinance로 USD/KRW 환율을 가져온다. 실패 시 1,300원 fallback.
+    # FxRate dataclass는 cache_data 직렬화 문제가 있을 수 있으므로 (rate, source)만 추출
+    try:
+        _fx = FxService.fetch_usdkrw()
+        usd_krw: float = _fx.rate
+        fx_source: str = _fx.source
+    except Exception:
+        usd_krw = 1300.0
+        fx_source = "fallback"
+
+    # =========================
+    # 3) 통화별 분리 집계 (평가금액 / 투자원금)
+    #    currency 컬럼을 포함해 최신 스냅샷 날짜 기준으로 조회
+    # =========================
+    @st.cache_data(ttl=600)
+    def _load_latest_snapshot_by_currency(u_id, acc_id, s_date, e_date):
+        """daily_snapshots에서 currency별로 valuation/purchase를 합산한다."""
+        q = build_daily_snapshots_query(
+            select_cols="date, currency, valuation_amount, purchase_amount",
+            start_date=s_date,
+            end_date=e_date,
+            user_id=u_id,
+            account_id=acc_id,
+        )
+        rows = fetch_all_pagination(q)
+        return rows
+
+    snapshot_rows = _load_latest_snapshot_by_currency(user_id, account_id, start_date, end_date)
+
+    if snapshot_rows:
+        # 가장 최신 날짜의 스냅샷만 사용
+        latest_date = max(r["date"] for r in snapshot_rows)
+        latest_rows = [r for r in snapshot_rows if r["date"] == latest_date]
+
+        total_val_krw = 0.0
+        total_buy_krw = 0.0
+        for r in latest_rows:
+            val = float(r.get("valuation_amount") or 0)
+            buy = float(r.get("purchase_amount") or 0)
+            currency = (r.get("currency") or "KRW").upper()
+
+            if currency == "USD":
+                # 달러 자산 → 원화로 환산
+                total_val_krw += val * usd_krw
+                total_buy_krw += buy * usd_krw
+            else:
+                # KRW 및 기타 통화는 그대로 합산 (기타 통화는 추후 확장 가능)
+                total_val_krw += val
+                total_buy_krw += buy
+    else:
+        # snapshot_rows가 없으면 기존 portfolio_df 데이터로 fallback
+        if not pf_valid.empty:
+            last = pf_valid.sort_values("date").iloc[-1]
+            total_val_krw = float(last["valuation_amount"])
+            total_buy_krw = float(last["purchase_amount"])
+        else:
+            total_val_krw = 0.0
+            total_buy_krw = 0.0
+
+    pnl = total_val_krw - total_buy_krw
+    pnl_rate = (pnl / total_buy_krw * 100) if total_buy_krw > 0 else 0.0
+
+    # =========================
+    # 4) KPI 카드 표시
+    # =========================
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("평가금액", f"{total_val:,.0f} 원")
-    c2.metric("투자원금", f"{total_buy:,.0f} 원")
+    c1.metric("평가금액", f"{total_val_krw:,.0f} 원")
+    c2.metric("투자원금", f"{total_buy_krw:,.0f} 원")
     c3.metric("평가손익", f"{pnl:,.0f} 원", delta=f"{pnl_rate:.2f}%")
     c4.metric("누적 수익률", f"{portfolio_return_pct:.2f}%")
+
+    # 사용한 환율 정보 표시 (출처: yfinance 또는 fallback 여부 명시)
+    fx_source_label = "실시간 (yfinance)" if fx_source == "yfinance" else f"fallback ({usd_krw:,.0f}원 고정)"
+    st.caption(f"💱 적용 환율: 1 USD = {usd_krw:,.2f} 원  |  출처: {fx_source_label}")
 
 
 def render_period_performance_section(user_id: str, account_id: str, start_date: str, end_date: str):

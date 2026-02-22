@@ -218,8 +218,12 @@ def _read_uploaded_file(uploaded_file) -> Optional[pd.DataFrame]:
     return None
 
 
-def _prepare_trade_rows(df: pd.DataFrame, user_id: str) -> Tuple[List[PreparedTransaction], List[str]]:
-    errors: List[str] = []
+def _prepare_trade_rows(
+    df: pd.DataFrame, user_id: str
+) -> Tuple[List[PreparedTransaction], List[str], List[str]]:
+    """거래 행을 검증해 (준비된 거래 목록, 오류 목록, 중복 거래 목록)을 반환한다."""
+    errors: List[str] = []       # 포맷/유효성 오류 → 전체 업로드 차단
+    duplicates: List[str] = []   # DB 중복 거래 → 스킵하되 화면에 표시
     prepared: List[PreparedTransaction] = []
     accounts_df = _load_accounts_df(user_id)
     assets_df = _load_assets_df()
@@ -301,7 +305,7 @@ def _prepare_trade_rows(df: pd.DataFrame, user_id: str) -> Tuple[List[PreparedTr
         tax_value = float(tax) if not pd.isna(tax) else 0.0
         memo = str(row.get("memo") or "").strip() or None
 
-        # ✅ 파일 내부 중복 체크
+        # ✅ 파일 내부 중복 체크 (포맷 오류로 간주 → errors에 추가)
         dedupe_key = (account_id, ticker, tx_date.date().isoformat(), trade_type, float(quantity), float(price))
         if dedupe_key in seen_keys:
             errors.append(f"{row_number}행: 업로드 파일 내 중복 거래가 있습니다.")
@@ -309,6 +313,7 @@ def _prepare_trade_rows(df: pd.DataFrame, user_id: str) -> Tuple[List[PreparedTr
         seen_keys.add(dedupe_key)
 
         # ✅ 기존 DB 중복 체크 (자산이 이미 있는 경우에만)
+        #    중복이어도 나머지 거래는 계속 업로드 → duplicates 리스트에 별도 수집
         if asset_row is not None:
             if _find_existing_duplicate(
                 account_id=account_id,
@@ -319,8 +324,11 @@ def _prepare_trade_rows(df: pd.DataFrame, user_id: str) -> Tuple[List[PreparedTr
                 price=float(price),
                 tax=tax_value,
             ):
-                errors.append(f"{row_number}행: 동일한 거래가 이미 등록되어 있습니다.")
-                continue
+                duplicates.append(
+                    f"{row_number}행: [{ticker}] {tx_date.date()} {trade_type} "
+                    f"수량={float(quantity)} 단가={float(price)} — 이미 등록된 거래"
+                )
+                continue  # 중복 거래는 업로드 목록에서 제외
 
         prepared.append(
             PreparedTransaction(
@@ -339,11 +347,15 @@ def _prepare_trade_rows(df: pd.DataFrame, user_id: str) -> Tuple[List[PreparedTr
             )
         )
 
-    return prepared, errors
+    return prepared, errors, duplicates
 
 
-def _prepare_dividend_rows(df: pd.DataFrame, user_id: str) -> Tuple[List[PreparedTransaction], List[str]]:
-    errors: List[str] = []
+def _prepare_dividend_rows(
+    df: pd.DataFrame, user_id: str
+) -> Tuple[List[PreparedTransaction], List[str], List[str]]:
+    """배당금 행을 검증해 (준비된 거래 목록, 오류 목록, 중복 거래 목록)을 반환한다."""
+    errors: List[str] = []       # 포맷/유효성 오류 → 전체 업로드 차단
+    duplicates: List[str] = []   # DB 중복 거래 → 스킵하되 화면에 표시
     prepared: List[PreparedTransaction] = []
     accounts_df = _load_accounts_df(user_id)
 
@@ -398,12 +410,15 @@ def _prepare_dividend_rows(df: pd.DataFrame, user_id: str) -> Tuple[List[Prepare
         if market:
             memo += f" | {market}"
 
+        # ✅ 파일 내부 중복 체크 (포맷 오류로 간주 → errors에 추가)
         dedupe_key = (account_id, cash_asset_id, payout_date.date().isoformat(), float(net), tax_value)
         if dedupe_key in seen_keys:
             errors.append(f"{row_number}행: 업로드 파일 내 중복 배당금이 있습니다.")
             continue
         seen_keys.add(dedupe_key)
 
+        # ✅ 기존 DB 중복 체크
+        #    중복이어도 나머지 거래는 계속 업로드 → duplicates 리스트에 별도 수집
         if _find_existing_duplicate(
             account_id=account_id,
             asset_id=cash_asset_id,
@@ -413,8 +428,10 @@ def _prepare_dividend_rows(df: pd.DataFrame, user_id: str) -> Tuple[List[Prepare
             price=1.0,
             tax=tax_value,
         ):
-            errors.append(f"{row_number}행: 동일한 배당금 입금 거래가 이미 등록되어 있습니다.")
-            continue
+            duplicates.append(
+                f"{row_number}행: [{ticker}] {payout_date.date()} 배당금(세후)={float(net)} — 이미 등록된 거래"
+            )
+            continue  # 중복 거래는 업로드 목록에서 제외
 
         prepared.append(
             PreparedTransaction(
@@ -432,7 +449,7 @@ def _prepare_dividend_rows(df: pd.DataFrame, user_id: str) -> Tuple[List[Prepare
             )
         )
 
-    return prepared, errors
+    return prepared, errors, duplicates
 
 
 def _execute_upload(prepared_rows: List[PreparedTransaction], auto_cash: bool) -> Tuple[int, List[str]]:
@@ -466,7 +483,7 @@ def _execute_upload(prepared_rows: List[PreparedTransaction], auto_cash: bool) -
 
 
 def render_transaction_importer(user_id: str) -> None:
-    st.title("📥 Transaction Importer")
+    st.title("📥 거래내역 업로더(from HTS)")
     st.caption("CSV/XLSX 업로드로 매매 내역 또는 배당금 내역을 일괄 등록합니다.")
 
     import_type = st.radio(
@@ -525,13 +542,13 @@ def render_transaction_importer(user_id: str) -> None:
 
     if import_type == "매매 내역":
         aliases = {
-            "account_name": ["계좌명", "account", "account_name"],
+            "account_name": ["계좌", "계좌명", "account", "account_name"],
             "transaction_date": ["거래일", "체결일", "매매일자", "transaction_date"],
-            "ticker": ["티커", "종목코드", "ticker"],
+            "ticker": ["티커", "종목코드", "ticker", "단축코드"],
             "trade_type": ["거래타입", "매수/매도", "구분", "trade_type"],
-            "quantity": ["수량", "거래수량", "quantity"],
+            "quantity": ["수량", "거래수량", "quantity", "결제수량"],
             "price": ["단가", "체결가", "price"],
-            "fee": ["수수료", "fee"],
+            "fee": ["수수료", "fee", "매매수수료"],
             "tax": ["세금", "tax"],
             "memo": ["메모", "memo"],
             "asset_name": ["종목명", "자산명", "asset_name"],
@@ -539,7 +556,7 @@ def render_transaction_importer(user_id: str) -> None:
             "market": ["시장", "시장구분", "market"],
             "asset_type": ["자산유형", "asset_type"],
         }
-    else:
+    else:   # 배당 업로드
         aliases = {
             "account_name": ["계좌명", "account", "account_name"],
             "transaction_date": ["지급일자", "거래일", "transaction_date"],
@@ -575,16 +592,29 @@ def render_transaction_importer(user_id: str) -> None:
         auto_cash = st.checkbox("BUY/SELL 시 CASH 자동 반영", value=True)
 
     if import_type == "매매 내역":
-        prepared, errors = _prepare_trade_rows(mapped_df, user_id)
+        prepared, errors, duplicates = _prepare_trade_rows(mapped_df, user_id)
     else:
-        prepared, errors = _prepare_dividend_rows(mapped_df, user_id)
+        prepared, errors, duplicates = _prepare_dividend_rows(mapped_df, user_id)
 
+    # ❌ 포맷/유효성 오류가 있으면 전체 업로드 차단
     if errors:
         st.error("업로드 오류가 발견되어 전체 업로드가 취소되었습니다.")
-        st.dataframe(pd.DataFrame({"오류": errors}))
+        st.dataframe(pd.DataFrame({"오류 내용": errors}))
         return
 
-    st.success("✅ 모든 행이 검증되었습니다. 업로드를 진행할 수 있습니다.")
+    # ⚠️ DB 중복 거래는 경고로 표시하되 업로드는 계속 진행
+    if duplicates:
+        st.warning(
+            f"⚠️ {len(duplicates)}건의 중복 거래가 발견되었습니다. "
+            "해당 거래는 건너뛰고 나머지 거래는 정상 업로드됩니다."
+        )
+        st.dataframe(pd.DataFrame({"중복 거래 (스킵됨)": duplicates}))
+
+    if not prepared:
+        st.info("업로드할 신규 거래가 없습니다. (모든 거래가 중복이거나 오류입니다.)")
+        return
+
+    st.success(f"✅ {len(prepared)}건의 신규 거래가 검증되었습니다. 업로드를 진행할 수 있습니다.")
 
     if st.button("업로드 실행"):
         try:
