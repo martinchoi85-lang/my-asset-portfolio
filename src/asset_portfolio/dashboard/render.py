@@ -32,6 +32,7 @@ from asset_portfolio.backend.services.transaction_service import (
 from asset_portfolio.backend.infra import query
 from asset_portfolio.dashboard.data import load_assets_lookup
 from asset_portfolio.backend.infra.query import fetch_all_pagination, load_asset_prices
+from asset_portfolio.dashboard.fx_utils import get_usdkrw_rate, apply_fx_to_df, fx_caption
 
 
 @st.cache_data(ttl=600)
@@ -47,59 +48,25 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
 
     - 캐시를 사용해서 동일한 계좌/사용자 요청을 빠르게 처리합니다.
     - Supabase에서 원본 데이터를 가져오고, 파이썬에서 그룹 집계를 수행합니다.
-    - asset_summary_live가 비어 있으면 daily_snapshots의 최신 날짜 데이터를 대체로 사용합니다.
+    - USD 자산은 apply_fx_to_df()로 KRW 환산 후 합산합니다.
     """
     supabase = get_supabase_client()
+    usd_krw, _ = get_usdkrw_rate()  # FX 환율 중앙 조회
 
-    # 기본 조회: asset_summary_live + assets 조인
-    query_builder = (
-        supabase.table("asset_summary_live")
-        .select(
-            "asset_id, account_id, total_valuation_amount, "
-            "assets (asset_type, underlying_asset_class)"
-        )
-    )
-
-    # 계좌 선택이 "전체"인지 여부에 따라 필터 조건이 달라짐
+    # 계좌 ID 목록
     if account_id and account_id != "__ALL__":
-        query_builder = query_builder.eq("account_id", account_id)
+        account_ids = [account_id]
     else:
-        # 전체 계좌 조회 시, 로그인 사용자의 계좌 리스트를 가져와서 IN 조건으로 조회
         user_accounts = query.get_accounts(user_id)
-        user_account_ids = [acc["id"] for acc in user_accounts]
-        if not user_account_ids:
+        account_ids = [acc["id"] for acc in user_accounts]
+        if not account_ids:
             return pd.DataFrame(
                 columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
             )
-        query_builder = query_builder.in_("account_id", user_account_ids)
-
-    rows = query_builder.execute().data or []
-
-    # ============================================
-    # 1) 우선 asset_summary_live 기반 데이터 정규화
-    # ============================================
-    df = pd.json_normalize(rows, sep=".") if rows else pd.DataFrame()
-
-    # 데이터 안전성: 숫자 변환 + 결측치 기본값 처리
-    if not df.empty:
-        df["total_valuation_amount"] = pd.to_numeric(
-            df["total_valuation_amount"], errors="coerce"
-        ).fillna(0)
-        df["assets.asset_type"] = df["assets.asset_type"].fillna("미분류")
-        df["assets.underlying_asset_class"] = df["assets.underlying_asset_class"].fillna("미분류")
-
-        # 표준화된 컬럼명으로 정리
-        df = df.rename(
-            columns={
-                "assets.asset_type": "asset_type",
-                "assets.underlying_asset_class": "underlying_asset_class",
-            }
-        )
-
-        return df[["asset_type", "underlying_asset_class", "total_valuation_amount"]]
 
     # ==========================================================
-    # 2) asset_summary_live가 비어 있으면 최신 스냅샷으로 대체
+    # 1) 최신 스냅샷 기준으로 daily_snapshots 직접 조회
+    #    (asset_summary_live는 currency 콜럼이 없어 FX 변환 불가 → daily_snapshots 사용)
     # ==========================================================
     latest_query = (
         supabase.table("daily_snapshots")
@@ -110,13 +77,7 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
     if account_id and account_id != "__ALL__":
         latest_query = latest_query.eq("account_id", account_id)
     else:
-        user_accounts = query.get_accounts(user_id)
-        user_account_ids = [acc["id"] for acc in user_accounts]
-        if not user_account_ids:
-            return pd.DataFrame(
-                columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
-            )
-        latest_query = latest_query.in_("account_id", user_account_ids)
+        latest_query = latest_query.in_("account_id", account_ids)
 
     latest_row = latest_query.execute().data or []
     if not latest_row:
@@ -129,7 +90,7 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
     snapshot_query = (
         supabase.table("daily_snapshots")
         .select(
-            "asset_id, account_id, valuation_amount, "
+            "asset_id, account_id, valuation_amount, currency, "
             "assets (asset_type, underlying_asset_class)"
         )
         .eq("date", latest_date)
@@ -137,13 +98,7 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
     if account_id and account_id != "__ALL__":
         snapshot_query = snapshot_query.eq("account_id", account_id)
     else:
-        user_accounts = query.get_accounts(user_id)
-        user_account_ids = [acc["id"] for acc in user_accounts]
-        if not user_account_ids:
-            return pd.DataFrame(
-                columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
-            )
-        snapshot_query = snapshot_query.in_("account_id", user_account_ids)
+        snapshot_query = snapshot_query.in_("account_id", account_ids)
 
     snapshot_rows = snapshot_query.execute().data or []
     if not snapshot_rows:
@@ -151,14 +106,15 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
             columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
         )
 
-    snapshot_df = pd.json_normalize(snapshot_rows, sep=".")
-    snapshot_df["valuation_amount"] = pd.to_numeric(
-        snapshot_df["valuation_amount"], errors="coerce"
-    ).fillna(0)
-    snapshot_df["assets.asset_type"] = snapshot_df["assets.asset_type"].fillna("미분류")
-    snapshot_df["assets.underlying_asset_class"] = snapshot_df["assets.underlying_asset_class"].fillna("미분류")
+    df = pd.json_normalize(snapshot_rows, sep=".")
+    df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce").fillna(0)
+    df["assets.asset_type"] = df["assets.asset_type"].fillna("미분류")
+    df["assets.underlying_asset_class"] = df["assets.underlying_asset_class"].fillna("미분류")
 
-    snapshot_df = snapshot_df.rename(
+    # ✅ USD 자산 KRW 환산
+    df = apply_fx_to_df(df, usd_krw, amount_cols=["valuation_amount"], currency_col="currency")
+
+    df = df.rename(
         columns={
             "assets.asset_type": "asset_type",
             "assets.underlying_asset_class": "underlying_asset_class",
@@ -166,7 +122,7 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
         }
     )
 
-    return snapshot_df[["asset_type", "underlying_asset_class", "total_valuation_amount"]]
+    return df[["asset_type", "underlying_asset_class", "total_valuation_amount"]]
 
 
 def render_asset_grouping_pie_section(user_id: str, account_id: str):
@@ -269,7 +225,6 @@ def render_asset_grouping_pie_section(user_id: str, account_id: str):
     
     
 def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date: str):
-    from asset_portfolio.backend.services.fx_service import FxService
     from asset_portfolio.backend.infra.query import build_daily_snapshots_query, fetch_all_pagination
 
     st.subheader("📈 Portfolio 전체 수익률")
@@ -299,17 +254,9 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
         portfolio_return_pct = 0.0
 
     # =========================
-    # 2) 환율 조회 (USD → KRW)
+    # 2) 환율 조회 (USD → KRW) — 중앙화된 유틸 사용
     # =========================
-    # yfinance로 USD/KRW 환율을 가져온다. 실패 시 1,300원 fallback.
-    # FxRate dataclass는 cache_data 직렬화 문제가 있을 수 있으므로 (rate, source)만 추출
-    try:
-        _fx = FxService.fetch_usdkrw()
-        usd_krw: float = _fx.rate
-        fx_source: str = _fx.source
-    except Exception:
-        usd_krw = 1300.0
-        fx_source = "fallback"
+    usd_krw, fx_source = get_usdkrw_rate()
 
     # =========================
     # 3) 통화별 분리 집계 (평가금액 / 투자원금)
@@ -372,9 +319,8 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
     c3.metric("평가손익", f"{pnl:,.0f} 원", delta=f"{pnl_rate:.2f}%")
     c4.metric("누적 수익률", f"{portfolio_return_pct:.2f}%")
 
-    # 사용한 환율 정보 표시 (출처: yfinance 또는 fallback 여부 명시)
-    fx_source_label = "실시간 (yfinance)" if fx_source == "yfinance" else f"fallback ({usd_krw:,.0f}원 고정)"
-    st.caption(f"💱 적용 환율: 1 USD = {usd_krw:,.2f} 원  |  출처: {fx_source_label}")
+    # 사용한 환율 정보 표시 — 공통 유틸 사용
+    st.caption(fx_caption(usd_krw, fx_source))
 
 
 def render_period_performance_section(user_id: str, account_id: str, start_date: str, end_date: str):
@@ -439,15 +385,28 @@ def render_period_performance_section(user_id: str, account_id: str, start_date:
 
 
 def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str, end_date: str):
+    from asset_portfolio.backend.services.portfolio_service import (
+        load_portfolio_daily_snapshots_krw,
+    )
+    from asset_portfolio.backend.services.portfolio_calculator import (
+        calculate_portfolio_return_series_from_snapshots,
+    )
+
     st.subheader("📈 자산 추세 (Trend)")
-    
+
     if not account_id:
         st.info("계좌를 선택해주세요.")
         return
 
-    # 데이터 조회
-    df = get_portfolio_return_series(user_id, account_id, start_date, end_date)
-    
+    # USD/KRW 환율 중앙 조회
+    usd_krw, fx_source = get_usdkrw_rate()
+
+    # ✅ KRW 환산 포함 시계열 조회
+    snapshots = load_portfolio_daily_snapshots_krw(
+        user_id, account_id, start_date, end_date, usd_krw=usd_krw
+    )
+    df = calculate_portfolio_return_series_from_snapshots(snapshots)
+
     if df.empty:
         st.info("표시할 데이터가 없습니다.")
         return
@@ -818,7 +777,6 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
             return
         latest_query = latest_query.in_("account_id", user_account_ids)
 
-
     latest_row = latest_query.execute().data or []
 
     if not latest_row:
@@ -843,7 +801,6 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
         user_account_ids = [acc['id'] for acc in user_accounts]
         rows_query = rows_query.in_("account_id", user_account_ids)
 
-
     rows = rows_query.execute().data or []
 
     if not rows:
@@ -859,6 +816,16 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
         return
 
     df = attach_manual_cost_basis(df, user_id=user_id)
+
+    # ✅ USD 자산의 평가금액 / 원금을 KRW로 환산
+    #    - 단가(valuation_price, purchase_price)는 원통화 유지 (표에서 '통화' 콜럼으로 달러임을 명시)
+    #    - 수익금액 / 수익률은 환산된 금액 기준으로 자동 재계산됨
+    usd_krw, fx_source = get_usdkrw_rate()
+    df = apply_fx_to_df(
+        df, usd_krw,
+        amount_cols=["valuation_amount", "purchase_amount"],
+        currency_col="currency",
+    )
 
     df["purchase_amount"] = pd.to_numeric(df["purchase_amount"], errors="coerce")
     df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce")
@@ -927,7 +894,7 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
         "자산 타입",
     ]
 
-    st.caption(f"기준일: {latest_date}")
+    st.caption(f"기준일: {latest_date}  |  {fx_caption(usd_krw, fx_source)}")
 
     display_df = df[columns].copy()
 
@@ -1103,6 +1070,10 @@ def render_asset_weight_section(user_id: str, account_id: str, start_date: str, 
     )
     
     df = build_asset_weight_df(rows)
+
+    # 환율 적용
+    usd_krw, fx_source = get_usdkrw_rate()       # 세션 캐시, 1회 조회
+    df = apply_fx_to_df(df, usd_krw, amount_cols=["valuation_amount", "purchase_amount"])
     
     # 총액이 0인 날짜는 제거(의미 없는 구간 제거)
     # df는 build_asset_weight_df 결과(valuation_amount_krw, total_amount_krw가 있음)

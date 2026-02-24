@@ -94,6 +94,52 @@ def load_portfolio_daily_snapshots(
     return result
 
 
+def load_portfolio_daily_snapshots_krw(
+    user_id: str,
+    account_id: str,
+    start_date: str,
+    end_date: str,
+    usd_krw: float = 1.0,
+) -> list:
+    """
+    daily_snapshots를 date 기준으로 집계하되,
+    USD 자산은 usd_krw 환율을 적용해 KRW로 환산한 후 합산한다.
+
+    기존 load_portfolio_daily_snapshots()와 인터페이스 동일.
+    트렌드 차트, 기간 성과 등 KRW 기준 시계열이 필요한 컴포넌트에서 사용.
+    """
+    q = build_daily_snapshots_query(
+        # currency 컬럼을 포함해 조회
+        select_cols="date, purchase_amount, valuation_amount, currency",
+        start_date=start_date,
+        end_date=end_date,
+        user_id=user_id,
+        account_id=account_id,
+    )
+    snapshots = fetch_all_pagination(q)
+
+    daily_map: dict = {}
+    for r in snapshots:
+        d = r["date"]
+        val = float(r.get("valuation_amount") or 0)
+        buy = float(r.get("purchase_amount") or 0)
+        ccy = str(r.get("currency") or "KRW").strip().upper()
+
+        # USD 행은 KRW로 환산
+        if ccy == "USD":
+            val *= usd_krw
+            buy *= usd_krw
+
+        if d not in daily_map:
+            daily_map[d] = {"date": d, "valuation_amount": 0.0, "purchase_amount": 0.0}
+        daily_map[d]["valuation_amount"] += val
+        daily_map[d]["purchase_amount"] += buy
+
+    result = list(daily_map.values())
+    result.sort(key=lambda x: x["date"])
+    return result
+
+
 def get_portfolio_return_series(user_id: str, account_id: str, start_date: str, end_date: str) -> pd.DataFrame:
     """
     Streamlit / API에서 사용하는 최종 함수
