@@ -156,6 +156,61 @@ class TransactionService:
         return rows[0]
 
     @staticmethod
+    def rebuild_realized_pnl_for_asset(account_id: str, asset_id: int):
+        """
+        특정 자산의 모든 거래를 순서대로 순회하며 realized_pnl을 계산하여 DB를 업데이트한다.
+        """
+        supabase = get_supabase_client()
+        resp = (
+            supabase.table("transactions")
+            .select("id, trade_type, quantity, price, fee, tax, realized_pnl")
+            .eq("asset_id", asset_id)
+            .eq("account_id", account_id)
+            .order("transaction_date")
+            .execute()
+        )
+        txs = resp.data or []
+        if not txs:
+            return
+
+        total_quantity = 0.0
+        total_cost = 0.0
+        updates = []
+
+        for tx in txs:
+            qty = float(tx["quantity"])
+            price = float(tx["price"])
+            fee = float(tx.get("fee", 0.0)) if tx.get("fee") is not None else 0.0
+            tax = float(tx.get("tax", 0.0)) if tx.get("tax") is not None else 0.0
+            trade_type = tx["trade_type"]
+
+            if trade_type in ("BUY", "INIT"):
+                total_cost += (qty * price) + fee + tax
+                total_quantity += qty
+            elif trade_type == "SELL":
+                avg_cost = (total_cost / total_quantity) if total_quantity > 0 else 0.0
+                
+                sell_cost = qty * avg_cost
+                sell_value = qty * price
+                new_pnl = sell_value - sell_cost - fee - tax
+
+                total_quantity -= qty
+                total_cost -= sell_cost
+
+                old_pnl = tx.get("realized_pnl")
+                old_pnl = float(old_pnl) if old_pnl is not None else 0.0
+
+                if abs(new_pnl - old_pnl) > 0.0001 or tx.get("realized_pnl") is None:
+                    updates.append({
+                        "id": tx["id"],
+                        "realized_pnl": new_pnl
+                    })
+
+        if updates:
+            for chunk in TransactionService._chunk(updates, size=500):
+                supabase.table("transactions").upsert(chunk, on_conflict="id").execute()
+
+    @staticmethod
     def rebuild_daily_snapshots_for_asset(
         account_id: str,
         asset_id: int,
@@ -171,6 +226,11 @@ class TransactionService:
         - manual 자산(price_source='manual')은 Snapshot Editor가 관리한다.
           → 자동 리빌드로 삭제/재생성하면 사용자가 입력한 평가금액이 날아가므로 리빌드 금지.
         """
+        # =========================
+        # -1) Realized P&L 먼저 리빌드 (항상 전체 기간 대상)
+        # =========================
+        TransactionService.rebuild_realized_pnl_for_asset(account_id, asset_id)
+
         # =========================
         # 0) manual 자산은 리빌드 제외
         # =========================

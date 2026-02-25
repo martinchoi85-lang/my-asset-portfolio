@@ -375,12 +375,14 @@ def apply_transactions(transactions):
     for tx in transactions:
         qty = float(tx["quantity"])
         price = float(tx["price"])
+        fee = float(tx.get("fee", 0.0)) if tx.get("fee") is not None else 0.0
+        tax = float(tx.get("tax", 0.0)) if tx.get("tax") is not None else 0.0
 
         # =========================
         # 매수 처리
         # =========================
         if tx["type"] == "BUY":
-            total_cost += qty * price
+            total_cost += (qty * price) + fee + tax
             total_quantity += qty
 
         # =========================
@@ -394,7 +396,11 @@ def apply_transactions(transactions):
             sell_cost = qty * avg_cost  # 매도한 수량의 원가
             sell_value = qty * price    # 매도한 수량의 매출액
 
-            realized_pnl += sell_value - sell_cost  # 실현 손익 계산
+            tx_pnl = sell_value - sell_cost - fee - tax
+            realized_pnl += tx_pnl  # 실현 손익 누적
+
+            # tx dict에 이번 거래의 실현손익을 기록해둔다 (transaction_service에서 활용 가능)
+            tx["realized_pnl"] = tx_pnl
 
             total_quantity -= qty    # 잔여 수량 차감
             total_cost -= sell_cost  # 잔여 원가 차감

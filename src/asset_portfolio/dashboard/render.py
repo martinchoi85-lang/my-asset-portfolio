@@ -311,13 +311,43 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
     pnl_rate = (pnl / total_buy_krw * 100) if total_buy_krw > 0 else 0.0
 
     # =========================
+    # 3.5) 실현손익 합계 조회 (transactions 테이블)
+    # =========================
+    @st.cache_data(ttl=600)
+    def _load_total_realized_pnl(u_id, acc_id, _usd_krw):
+        supabase = get_supabase_client()
+        q = supabase.table("transactions").select("realized_pnl, assets!inner(currency)")
+        if acc_id and acc_id != "__ALL__":
+            q = q.eq("account_id", acc_id)
+        else:
+            user_accounts = query.get_accounts(u_id)
+            user_account_ids = [acc['id'] for acc in user_accounts]
+            if user_account_ids:
+                q = q.in_("account_id", user_account_ids)
+        
+        rows = fetch_all_pagination(q)
+        total_realized = 0.0
+        for r in rows:
+            p_val = float(r.get("realized_pnl") or 0.0)
+            asset = r.get("assets") or {}
+            currency = (asset.get("currency") or "KRW").upper()
+            if currency == "USD":
+                total_realized += p_val * _usd_krw
+            else:
+                total_realized += p_val
+        return total_realized
+
+    total_realized_krw = _load_total_realized_pnl(user_id, account_id, usd_krw)
+
+    # =========================
     # 4) KPI 카드 표시
     # =========================
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("평가금액", f"{total_val_krw:,.0f} 원")
     c2.metric("투자원금", f"{total_buy_krw:,.0f} 원")
     c3.metric("평가손익", f"{pnl:,.0f} 원", delta=f"{pnl_rate:.2f}%")
     c4.metric("누적 수익률", f"{portfolio_return_pct:.2f}%")
+    c5.metric("실현손익 누적", f"{total_realized_krw:,.0f} 원")
 
     # 사용한 환율 정보 표시 — 공통 유틸 사용
     st.caption(fx_caption(usd_krw, fx_source))
@@ -868,11 +898,11 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
         columns={
             "accounts.name": "계좌명",
             "assets.name_kr": "자산명",
-            "quantity": "수량",
+            "quantity": "수량/수동자산 총액",
             "purchase_price": "매수단가",
             "valuation_price": "현재단가",
             "manual_principal": "원금(수동자산)",
-            "valuation_amount": "평가금액",
+            "valuation_amount": "평가금액(원)",
             "profit_amount": "수익금액",
             "profit_rate": "수익률",
             "currency": "통화",
@@ -883,11 +913,11 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
     columns = [
         "계좌명",
         "자산명",
-        "수량",
+        "수량/수동자산 총액",
         "매수단가",
         "현재단가",
         "원금(수동자산)",
-        "평가금액",
+        "평가금액(원)",
         "수익금액",
         "수익률",
         "통화",
@@ -1582,6 +1612,7 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
             fee,
             tax,
             memo,
+            realized_pnl,
             assets ( ticker, name_kr, currency ),
             accounts ( name, brokerage, old_owner, type )
         """)
@@ -1670,6 +1701,7 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
         "price": "가격",
         "fee": "수수료",
         "tax": "세금",
+        "realized_pnl": "실현손익",
         "memo": "메모",
         "account_name": "계좌",
     }
@@ -1687,7 +1719,7 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
 
     display_order = [
         "거래일", "거래구분", "티커", "자산명", "통화",
-        "수량/금액", "가격", "수수료", "세금", "계좌", "메모"
+        "수량/금액", "가격", "수수료", "세금", "실현손익", "계좌", "메모"
     ]
 
     cols = [c for c in display_order if c in df_display.columns] + [c for c in df_display.columns if c not in display_order]
@@ -1919,6 +1951,7 @@ def render_asset_transaction_history(user_id: str, account_id: str):
             fee,
             tax,
             memo,
+            realized_pnl,
             accounts (name, brokerage, old_owner)
         """)
         .eq("asset_id", int(selected_asset_id))
@@ -1984,6 +2017,7 @@ def render_asset_transaction_history(user_id: str, account_id: str):
         "price": "단가",
         "fee": "수수료",
         "tax": "세금",
+        "realized_pnl": "실현손익",
         "memo": "메모",
         "account_label": "계좌",
     }
