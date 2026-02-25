@@ -320,3 +320,75 @@ def calculate_period_performance(
         "return_rate": return_rate,
     }
 
+
+def get_realized_pnl_by_period(
+    user_id: str,
+    account_id: str,
+    start_date: str,
+    end_date: str,
+    usd_krw: float = 1.0,
+) -> pd.DataFrame:
+    """
+    선택한 기간 동안 발생한 실현손익 내역을 조회하고 DataFrame으로 반환한다.
+    - 대상: trade_type == 'SELL', realized_pnl IS NOT NULL
+    - 환율 적용 (usd_krw): USD 자산의 경우 KRW로 환산.
+
+    Returns: DataFrame containing [transaction_date, asset_id, ticker, name_kr, currency, realized_pnl]
+    """
+    from asset_portfolio.backend.infra.supabase_client import get_supabase_client
+    supabase = get_supabase_client()
+    
+    q = supabase.table("transactions").select(
+        "transaction_date, asset_id, realized_pnl, assets!inner(ticker, name_kr, currency)"
+    )
+    
+    # SELL이고 realized_pnl이 있는 거래만. (not_은 SDK 이슈가 있으므로 파이썬에서 필터링하거나 eq 적용)
+    q = q.eq("trade_type", "SELL")
+    
+    if start_date:
+        q = q.gte("transaction_date", start_date)
+    if end_date:
+        q = q.lte("transaction_date", end_date)
+        
+    if account_id and account_id != "__ALL__":
+        q = q.eq("account_id", account_id)
+    else:
+        user_accounts = query.get_accounts(user_id)
+        user_account_ids = [acc['id'] for acc in user_accounts]
+        if user_account_ids:
+            q = q.in_("account_id", user_account_ids)
+            
+    rows = fetch_all_pagination(q)
+    
+    data = []
+    for r in rows:
+        pnl = r.get("realized_pnl")
+        if pnl is None:
+            continue
+            
+        pnl = float(pnl)
+        asset = r.get("assets") or {}
+        ccy = str(asset.get("currency", "KRW")).strip().upper()
+        
+        # 환율 적용
+        if ccy == "USD":
+            pnl *= usd_krw
+            
+        # date 파싱 (YYYY-MM-DD 형식으로 변환)
+        t_date_str = r.get("transaction_date", "")
+        if "T" in t_date_str:
+            t_date = t_date_str.split("T")[0]
+        else:
+            t_date = t_date_str[:10]
+            
+        data.append({
+            "transaction_date": t_date,
+            "asset_id": r.get("asset_id"),
+            "ticker": asset.get("ticker", ""),
+            "name_kr": asset.get("name_kr", ""),
+            "currency": ccy,
+            "realized_pnl_krw": pnl
+        })
+        
+    return pd.DataFrame(data)
+

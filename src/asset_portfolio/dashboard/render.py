@@ -246,10 +246,18 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
         st.warning("조회된 데이터가 없습니다.")
         return
 
-    # 누적 수익률(%)은 기존 시계열 데이터 그대로 사용
+    # 선택 기간의 수익률 계산 (기말 누적수익률과 기초 누적수익률을 이용한 상대 수익률)
     pf_valid = portfolio_df.dropna(subset=["portfolio_return"]).copy()
     if not pf_valid.empty:
-        portfolio_return_pct = float(pf_valid.sort_values("date").iloc[-1]["portfolio_return"]) * 100
+        sorted_pf = pf_valid.sort_values("date")
+        start_ret = float(sorted_pf.iloc[0]["portfolio_return"])
+        end_ret = float(sorted_pf.iloc[-1]["portfolio_return"])
+        
+        # (1 + 기말수익률) / (1 + 기초수익률) - 1
+        if (1 + start_ret) != 0:
+            portfolio_return_pct = (((1 + end_ret) / (1 + start_ret)) - 1) * 100
+        else:
+            portfolio_return_pct = 0.0
     else:
         portfolio_return_pct = 0.0
 
@@ -346,7 +354,7 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
     c1.metric("평가금액", f"{total_val_krw:,.0f} 원")
     c2.metric("투자원금", f"{total_buy_krw:,.0f} 원")
     c3.metric("평가손익", f"{pnl:,.0f} 원", delta=f"{pnl_rate:.2f}%")
-    c4.metric("누적 수익률", f"{portfolio_return_pct:.2f}%")
+    c4.metric("선택기간 수익률", f"{portfolio_return_pct:.2f}%")
     c5.metric("실현손익 누적", f"{total_realized_krw:,.0f} 원")
 
     # 사용한 환율 정보 표시 — 공통 유틸 사용
@@ -1593,6 +1601,91 @@ def render_asset_contribution_section_full(
     #         height=400,
     #         width='stretch'
     #     )
+
+
+def render_realized_pnl_charts(user_id: str, account_id: str, start_date: str, end_date: str, key_suffix: str = ""):
+    from asset_portfolio.backend.services.portfolio_service import get_realized_pnl_by_period
+    
+    st.subheader("💰 기간 내 실현손익 분석")
+    
+    usd_krw, fx_source = get_usdkrw_rate()
+    
+    df = get_realized_pnl_by_period(user_id, account_id, start_date, end_date, usd_krw=usd_krw)
+    
+    if df.empty:
+        st.info("선택한 기간에 발생한 실현손익 내역이 없습니다.")
+        return
+        
+    # 날짜를 월 단위로 변환 시도
+    # transaction_date 포맷 정규화 (YYYY-MM-DD)
+    df["month"] = pd.to_datetime(df["transaction_date"]).dt.to_period("M").astype(str)
+    
+    # 1) 전체 합계
+    total_pnl = df["realized_pnl_krw"].sum()
+    st.metric("기간 총 실현손익", f"{total_pnl:,.0f} 원")
+    st.caption(fx_caption(usd_krw, fx_source))
+    
+    c1, c2 = st.columns(2)
+    
+    # 2) 자산별 실현손익 요약 (수평 Bar 차트)
+    with c1:
+        st.markdown("**기여도 높은 자산 (Top 10)**")
+        df_asset = df.groupby(["ticker", "name_kr"], as_index=False)["realized_pnl_krw"].sum()
+        df_asset = df_asset.sort_values("realized_pnl_krw", ascending=True) # 가로 차트용 오름차순
+        
+        # 이름이 없는 경우 티커 사용
+        df_asset["display_name"] = df_asset.apply(
+            lambda x: x["name_kr"] if x["name_kr"] else x["ticker"], axis=1
+        )
+        
+        # 상/하위 10개만 볼 수도 있지만 일단 전체 (포트폴리오가 크면 많을 수 있으니 필터링 필요)
+        if len(df_asset) > 10:
+            df_asset = pd.concat([
+                df_asset.head(3), # 손실 큰 쪽
+                df_asset.tail(7)  # 이익 큰 쪽
+            ]).sort_values("realized_pnl_krw", ascending=True)
+            
+        fig_asset = go.Figure(go.Bar(
+            x=df_asset["realized_pnl_krw"],
+            y=df_asset["display_name"],
+            orientation='h',
+            marker_color=df_asset["realized_pnl_krw"].apply(lambda x: 'tomato' if x < 0 else 'cornflowerblue'),
+            text=df_asset["realized_pnl_krw"].apply(lambda x: f"{x:,.0f}"),
+            textposition='auto',
+        ))
+        fig_asset.update_layout(
+            margin=dict(l=10, r=10, t=10, b=10),
+            height=300,
+            xaxis=dict(showgrid=True, zeroline=True, zerolinecolor='gray'),
+            yaxis=dict(showgrid=False)
+        )
+        st.plotly_chart(fig_asset, use_container_width=True, key=f"realized_pnl_asset_bar_{key_suffix}")
+        
+    # 3) 월별 누적 실현손익 (Stacked Bar 차트)
+    with c2:
+        st.markdown("**월별 실현손익 누적**")
+        df_monthly = df.groupby(["month", "display_name" if "display_name" in df.columns else "name_kr"], as_index=False)["realized_pnl_krw"].sum()
+        
+        # 위에서 만든 display_name을 다시 매핑하거나 просто name_kr 씀
+        if "display_name" not in df_monthly.columns:
+             df_monthly["display_name"] = df_monthly.apply(lambda x: x["name_kr"] if x.get("name_kr") else "Unknown", axis=1)
+
+        fig_month = px.bar(
+            df_monthly, 
+            x="month", 
+            y="realized_pnl_krw", 
+            color="display_name",
+            text_auto='.2s'
+        )
+        fig_month.update_layout(
+            margin=dict(l=10, r=10, t=10, b=10),
+            height=300,
+            xaxis_title="",
+            yaxis_title="실현손익 (원)",
+            legend_title="자산",
+            xaxis=dict(type='category')
+        )
+        st.plotly_chart(fig_month, use_container_width=True, key=f"realized_pnl_monthly_bar_{key_suffix}")
 
 
 def render_transactions_table_section(user_id: str, account_id: str, start_date: str, end_date: str):

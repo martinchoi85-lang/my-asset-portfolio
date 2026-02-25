@@ -16,10 +16,11 @@ from asset_portfolio.dashboard.render import (
     render_transactions_table_section,
     render_latest_snapshot_table,
     render_asset_grouping_pie_section,
-    render_portfolio_trend_chart,
     render_asset_transaction_history,  # 자산별 거래 내역 조회
     render_period_performance_section, # 기간별 성과 분석
-    render_asset_contribution_stacked_area
+    render_asset_contribution_stacked_area,
+    render_realized_pnl_charts,
+    render_portfolio_trend_chart
 )
 from asset_portfolio.dashboard.transaction_editor import render_transaction_editor
 from asset_portfolio.dashboard.transaction_importer import render_transaction_importer
@@ -218,10 +219,20 @@ def render_main_dashboard():
 
         # 6. 트리맵
         render_portfolio_treemap(user_id, account_id, start_date, end_date)
+        
+        st.divider()
+
+        # 7. 실현손익 분석
+        render_realized_pnl_charts(user_id, account_id, start_date, end_date, key_suffix="performance_tab")
 
     with tab3:
-        st.caption("전체 거래 내역")
-        # 1. 자산별 거래 내역 조회
+        st.caption("전체 거래 내역 및 실현손익 분석")
+        
+        # 1. 기간 내 실현손익 분석 차트
+        render_realized_pnl_charts(user_id, account_id, start_date, end_date, key_suffix="history_tab")
+        st.divider()
+        
+        # 2. 자산별 거래 내역 조회
         render_asset_transaction_history(user_id, account_id)
         st.divider()
         # 2. 전체 거래 내역 테이블
