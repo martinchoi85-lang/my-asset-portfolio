@@ -102,7 +102,7 @@ def render_main_dashboard():
 
         # 기능 그룹화
         menu_items = {
-            "🏠 대시보드": ["대시보드"],
+            "🏠 포트폴리오": ["요약 (Overview)", "성과 (Performance)", "이력 (History)"],
             "✍️ 거래 관리": ["거래내역 입력", "정기매수 관리", "거래내역 업로드"],
             "💼 자산 관리": ["자산 정보 수정", "자산가격 업데이트"],
             "🛠️ 시스템 관리": ["스냅샷 수정"],
@@ -141,102 +141,116 @@ def render_main_dashboard():
         render_transaction_importer(user_id=user_id)
         st.stop()
 
-    # --- Main Dashboard Content (page == "대시보드") ---
-    portfolio_title = "지온이의 포트폴리오" if username == "지온이" else "승엽&민희 자산 포트폴리오"
-    
-    mobile_url = os.environ.get("MOBILE_URL")
-    title_cols = st.columns([0.05, 0.95], vertical_alignment="center")
-    with title_cols[0]:
-        if st.button("📊", help="모바일 페이지로 전환", disabled=not mobile_url):
-            target = f"{mobile_url.rstrip('/')}/?from=streamlit"
-            components.html(
-                f"<script>window.location.replace('{target}');</script>",
-                height=0,
-            )
+    # --- Main Dashboard Content ---
+    if page in ["요약 (Overview)", "성과 (Performance)", "이력 (History)"]:
+        portfolio_title = "지온이의 포트폴리오" if username == "지온이" else "승엽&민희 자산 포트폴리오"
+        
+        mobile_url = os.environ.get("MOBILE_URL")
+        title_cols = st.columns([0.05, 0.95], vertical_alignment="center")
+        with title_cols[0]:
+            if st.button("📊", help="모바일 페이지로 전환", disabled=not mobile_url):
+                target = f"{mobile_url.rstrip('/')}/?from=streamlit"
+                components.html(
+                    f"<script>window.location.replace('{target}');</script>",
+                    height=0,
+                )
+                st.stop()
+        with title_cols[1]:
+            st.title(portfolio_title)
+        
+        user_accounts = query.get_accounts(user_id)
+        if not user_accounts:
+            st.warning("표시할 계좌가 없습니다. 먼저 계좌를 추가해주세요.")
             st.stop()
-    with title_cols[1]:
-        st.title(portfolio_title)
-    
-    user_accounts = query.get_accounts(user_id)
-    if not user_accounts:
-        st.warning("표시할 계좌가 없습니다. 먼저 계좌를 추가해주세요.")
-        st.stop()
 
-    account_id = render_account_selector(user_accounts)
-    if not account_id:
-        st.stop()
-    
-    start_date, end_date = render_period_selector(user_id, account_id)
-    
-    # 탭 재구성: 요약 / 성과 / 이력
-    tab1, tab2, tab3 = st.tabs(["🏠 요약 (Overview)", "📈 성과 (Performance)", "📜 이력 (History)"])
-
-    with tab1:
-        st.caption("현재 자산 상태 요약")
-        # 1. KPI (기존 대시보드 상단)
-        render_kpi_section(user_id, account_id, start_date, end_date)
-        st.divider()
+        account_id = render_account_selector(user_accounts)
+        if not account_id:
+            st.stop()
         
-        # 2. 보유 종목 리스트 (Snapshot Table)
-        render_latest_snapshot_table(user_id, account_id)
-        st.divider()
+        # '요약' 탭에서는 기간 선택기를 숨김
+        if page == "요약 (Overview)":
+            # 전체 기간 혹은 최신 데이터를 위한 임의의 기본값 사용 (렌더링 시에는 기간무관한 데이터만 사용하지만 방어 목적)
+            from datetime import date, timedelta
+            start_date, end_date = str(date.today() - timedelta(days=365)), str(date.today())
+        else:
+            start_date, end_date = render_period_selector(user_id, account_id)
+            # string 변환 (함수들이 문자열을 기대할 수 있으므로 보정)
+            if start_date: start_date = str(start_date)
+            if end_date: end_date = str(end_date)
         
-        # 3. 자산 비중 (Pie + Bar)
-        c1, c2 = st.columns(2)
-        with c1:
-            render_asset_grouping_pie_section(user_id, account_id)
-        with c2:
-            # st.subheader("📊 자산 비중 상세")
-            render_asset_weight_section(user_id, account_id, start_date, end_date)
-
-    with tab2:
-        st.caption("기간별 투자 성과 분석")
-        # 1. 기간별 성과 요약 (Period Analysis)
-        render_period_performance_section(user_id, account_id, start_date, end_date)
-        st.divider()
-
-        # 2. 총자산 추세 (Trend Chart)
-        render_portfolio_trend_chart(user_id, account_id, start_date, end_date)
-        st.divider()
-
-        # 3. 벤치마크 비교
-        render_benchmark_comparison_section(user_id, account_id, start_date, end_date)
-        st.divider()
-
-        # 4. 수익 기여도 & 자산별 수익률
-        t2_c1, t2_c2 = st.columns(2)
-        with t2_c1:
-            render_asset_contribution_section_full(user_id, account_id, start_date, end_date)
-        with t2_c2:
-            render_asset_return_section(user_id, account_id, start_date, end_date)
+        if page == "요약 (Overview)":
+            st.subheader("🏠 요약 (Overview)")
+            st.caption("현재 자산 상태 요약")
+            # 1. KPI (기존 대시보드 상단)
+            render_kpi_section(user_id, account_id, start_date, end_date)
+            st.divider()
             
-        st.divider()
+            # 2. 보유 종목 리스트 (Snapshot Table)
+            render_latest_snapshot_table(user_id, account_id)
+            st.divider()
+            
+            # 3. 목표 비중 대비 현재 자산 구성 (신규 placeholder) 및 동적 그룹화 파이 차트
+            c1, c2 = st.columns(2)
+            with c1:
+                render_asset_grouping_pie_section(user_id, account_id)
+            with c2:
+                from asset_portfolio.dashboard.render import render_target_vs_actual_weight_section
+                render_target_vs_actual_weight_section(user_id, account_id)
+                
+        elif page == "성과 (Performance)":
+            st.subheader("📈 성과 (Performance)")
+            st.caption("기간별 투자 성과 분석")
+            # 1. 기간별 성과 요약 (Period Analysis)
+            render_period_performance_section(user_id, account_id, start_date, end_date)
+            st.divider()
 
-        # 5. 누적 기여도 (Stacked Area)
-        render_asset_contribution_stacked_area(user_id, account_id, start_date, end_date)
+            # 2. 총자산 추세 (Trend Chart)
+            render_portfolio_trend_chart(user_id, account_id, start_date, end_date)
+            st.divider()
 
-        st.divider()
+            # 3. 벤치마크 비교
+            render_benchmark_comparison_section(user_id, account_id, start_date, end_date)
+            st.divider()
 
-        # 6. 트리맵
-        render_portfolio_treemap(user_id, account_id, start_date, end_date)
-        
-        st.divider()
+            # 4. 수익 기여도 & 자산별 수익률
+            t2_c1, t2_c2 = st.columns(2)
+            with t2_c1:
+                render_asset_contribution_section_full(user_id, account_id, start_date, end_date)
+            with t2_c2:
+                render_asset_return_section(user_id, account_id, start_date, end_date)
+                
+            st.divider()
 
-        # 7. 실현손익 분석
-        render_realized_pnl_charts(user_id, account_id, start_date, end_date, key_suffix="performance_tab")
+            # 5. 자산 비중 변화 (이전 요약 탭에서 이동)
+            render_asset_weight_section(user_id, account_id, start_date, end_date)
+            st.divider()
 
-    with tab3:
-        st.caption("전체 거래 내역 및 실현손익 분석")
-        
-        # 1. 기간 내 실현손익 분석 차트
-        render_realized_pnl_charts(user_id, account_id, start_date, end_date, key_suffix="history_tab")
-        st.divider()
-        
-        # 2. 자산별 거래 내역 조회
-        render_asset_transaction_history(user_id, account_id)
-        st.divider()
-        # 2. 전체 거래 내역 테이블
-        render_transactions_table_section(user_id, account_id, start_date, end_date)
+            # 6. 누적 기여도 (Stacked Area)
+            render_asset_contribution_stacked_area(user_id, account_id, start_date, end_date)
+
+            st.divider()
+
+            # 7. 트리맵
+            render_portfolio_treemap(user_id, account_id, start_date, end_date)
+            
+            st.divider()
+
+            # 8. 실현손익 분석
+            render_realized_pnl_charts(user_id, account_id, start_date, end_date, key_suffix="performance_tab")
+
+        elif page == "이력 (History)":
+            st.subheader("📜 이력 (History)")
+            st.caption("전체 거래 내역 및 실현손익 분석")
+            
+            # 1. 기간 내 실현손익 분석 차트
+            render_realized_pnl_charts(user_id, account_id, start_date, end_date, key_suffix="history_tab")
+            st.divider()
+            
+            # 2. 자산별 거래 내역 조회
+            render_asset_transaction_history(user_id, account_id)
+            st.divider()
+            # 3. 전체 거래 내역 테이블
+            render_transactions_table_section(user_id, account_id, start_date, end_date)
 
 
 # --- Main app execution logic ---

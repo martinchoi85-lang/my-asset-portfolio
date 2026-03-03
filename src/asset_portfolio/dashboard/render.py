@@ -357,6 +357,7 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
     c4.metric("선택기간 수익률", f"{portfolio_return_pct:.2f}%")
     c5.metric("실현손익 누적", f"{total_realized_krw:,.0f} 원")
 
+    st.caption("※ 기간과 무관한 '포트폴리오 현재 평가금액'을 기준으로 계산된 값입니다.")
     # 사용한 환율 정보 표시 — 공통 유틸 사용
     st.caption(fx_caption(usd_krw, fx_source))
 
@@ -1086,14 +1087,84 @@ def render_period_selector(user_id: str, account_id: str):
 
     period = st.sidebar.radio(
         "조회 기간",
-        options=["오늘", "일주일", "한달", "3달(1분기)", "YTD(올해)", "ALL"],
+        options=["오늘", "일주일", "한달", "3달(1분기)", "YTD(올해)", "ALL", "직접 지정"],
         index=1  # 기본값: "일주일"
     )
 
-    start_date, end_date, note = resolve_date_range(user_id, period, account_id)
+    note = None
+    if period == "직접 지정":
+        date_range = st.sidebar.date_input(
+            "기간 선택",
+            value=(date.today() - timedelta(days=30), date.today()),
+            max_value=date.today(),
+            help="시작일과 종료일을 선택하세요."
+        )
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            start_date, end_date = date_range
+        else:
+            start_date = date_range[0] if isinstance(date_range, tuple) and len(date_range) > 0 else date_range
+            end_date = start_date
+    else:
+        start_date, end_date, note = resolve_date_range(user_id, period, account_id)
+        
     if note:
         st.sidebar.caption(note)
     return start_date, end_date
+
+
+def render_target_vs_actual_weight_section(user_id: str, account_id: str):
+    st.subheader("🎯 목표 자산 비중 (Target vs Actual)")
+    st.info("💡 목표 비중(Target Weight) 설정 기능은 향후 앱에 추가될 예정입니다. 리밸런싱 계획 수립을 위한 기능이 추가될 것입니다.")
+    
+    # DB에서 최신 평가 금액을 그룹화해서 가져옴
+    raw_df = load_asset_grouping_summary(user_id=user_id, account_id=account_id)
+    if raw_df.empty:
+        st.info("표시할 자산 데이터가 없습니다.")
+        return
+        
+    # '기초자산 클래스 (underlying_asset_class)' 기준으로 현재 비중 표시
+    grouped_df = (
+        raw_df.groupby("underlying_asset_class", as_index=False)["total_valuation_amount"]
+        .sum()
+        .sort_values("total_valuation_amount", ascending=False)
+    )
+    
+    total_amount = grouped_df["total_valuation_amount"].sum()
+    if total_amount == 0:
+        st.info("표시할 자산 데이터가 없습니다. (총 평가금액 0원)")
+        return
+        
+    grouped_df["current_weight"] = grouped_df["total_valuation_amount"] / total_amount * 100
+    
+    class_map = {
+        "Multi-Asset": "멀티에셋",
+        "Real Asset": "대체자산",
+        "Fixed Income": "채권",
+        "Equity": "주식",
+        "Other": "기타",
+    }
+    grouped_df["class_kr"] = grouped_df["underlying_asset_class"].apply(lambda x: class_map.get(str(x).strip(), x))
+    
+    # 표시용 DataFrame 구성
+    display_df = grouped_df[["class_kr", "total_valuation_amount", "current_weight"]].copy()
+    display_df.rename(columns={
+        "class_kr": "기초자산 클래스",
+        "total_valuation_amount": "평가금액 (KRW)",
+        "current_weight": "현재 비중 (%)"
+    }, inplace=True)
+    
+    # 목표 비중 더미 데이터 추가
+    display_df["목표 비중 (%)"] = "-" 
+    display_df["차이 (%p)"] = "-" 
+    
+    st.dataframe(
+        display_df.style.format({
+            "평가금액 (KRW)": "{:,.0f}",
+            "현재 비중 (%)": "{:.1f}%"
+        }),
+        width='stretch',
+        hide_index=True
+    )
 
 
 
@@ -1659,7 +1730,7 @@ def render_realized_pnl_charts(user_id: str, account_id: str, start_date: str, e
             xaxis=dict(showgrid=True, zeroline=True, zerolinecolor='gray'),
             yaxis=dict(showgrid=False)
         )
-        st.plotly_chart(fig_asset, use_container_width=True, key=f"realized_pnl_asset_bar_{key_suffix}")
+        st.plotly_chart(fig_asset, width='stretch', key=f"realized_pnl_asset_bar_{key_suffix}")
         
     # 3) 월별 누적 실현손익 (Stacked Bar 차트)
     with c2:
@@ -1685,7 +1756,7 @@ def render_realized_pnl_charts(user_id: str, account_id: str, start_date: str, e
             legend_title="자산",
             xaxis=dict(type='category')
         )
-        st.plotly_chart(fig_month, use_container_width=True, key=f"realized_pnl_monthly_bar_{key_suffix}")
+        st.plotly_chart(fig_month, width='stretch', key=f"realized_pnl_monthly_bar_{key_suffix}")
 
 
 def render_transactions_table_section(user_id: str, account_id: str, start_date: str, end_date: str):
