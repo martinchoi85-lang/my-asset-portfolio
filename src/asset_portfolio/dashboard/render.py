@@ -451,20 +451,19 @@ def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str,
         return
 
     # Plotly Line Chart
-    fig = go.Figure()
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # 1) 평가금액 (Line)
+    # 1) 평가금액 (Line, Primary Y)
     fig.add_trace(go.Scatter(
         x=df["date"], 
         y=df["valuation_amount"],
         mode='lines',
         name='총 평가금액',
-        # stackgroup='one',  <-- 제거: Area 차트가 0부터 시작하게 강제하는 원인
         line=dict(width=2, color='rgba(55, 128, 191, 1.0)'),
         hovertemplate='%{y:,.0f} 원<extra></extra>'
-    ))
+    ), secondary_y=False)
 
-    # 2) 투자원금 (Line)
+    # 2) 투자원금 (Line, Secondary Y)
     fig.add_trace(go.Scatter(
         x=df["date"], 
         y=df["purchase_amount"],
@@ -472,14 +471,15 @@ def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str,
         name='투자원금 (Net Invested)',
         line=dict(width=2, color='rgba(255, 165, 0, 1.0)', dash='dot'), # 구분을 위해 dot or lighter color
         hovertemplate='%{y:,.0f} 원<extra></extra>'
-    ))
+    ), secondary_y=True)
 
-    # Y축 범위 계산 (데이터의 min/max 기준)
+    # Y축 범위 계산 (위치 동기화를 위해 margin 약간 사용)
+    val_min, val_max = df["valuation_amount"].min(), df["valuation_amount"].max()
+    pur_min, pur_max = df["purchase_amount"].min(), df["purchase_amount"].max()
+    
     # 0을 포함하지 않고 변화량을 잘 보여주도록 설정
-    all_values = pd.concat([df["valuation_amount"], df["purchase_amount"]])
-    min_val = all_values.min()
-    max_val = all_values.max()
-    margin = (max_val - min_val) * 0.1 if max_val != min_val else max_val * 0.05
+    val_margin = (val_max - val_min) * 0.1 if val_max != val_min else val_max * 0.05
+    pur_margin = (pur_max - pur_min) * 0.1 if pur_max != pur_min else pur_max * 0.05
     
     fig.update_layout(
         height=350,
@@ -488,11 +488,21 @@ def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str,
         legend=dict(orientation="h", yanchor="top", y=1.02, xanchor="left", x=0),
     )
 
-    # rangemode="normal"은 기본적으로 데이터 범위에 맞춤 (0 강제 안함)
+    # Primary Y Axis (총 평가금액)
     fig.update_yaxes(
-        title_text="금액 (KRW)", 
-        tickformat=",", 
-        range=[max(0, min_val - margin), max_val + margin]
+        title_text="평가금액 (KRW)", 
+        tickformat=",.0f", 
+        range=[max(0, val_min - val_margin), val_max + val_margin],
+        secondary_y=False
+    )
+    
+    # Secondary Y Axis (투자원금)
+    fig.update_yaxes(
+        title_text="투자원금 (KRW)", 
+        tickformat=",.0f",
+        range=[max(0, pur_min - pur_margin), pur_max + pur_margin],
+        secondary_y=True,
+        showgrid=False  # 오른쪽 눈금선은 가림
     )
 
     st.plotly_chart(fig, width='stretch')
