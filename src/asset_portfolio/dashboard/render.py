@@ -357,7 +357,7 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
     c4.metric("선택기간 수익률", f"{portfolio_return_pct:.2f}%")
     c5.metric("실현손익 누적", f"{total_realized_krw:,.0f} 원")
 
-    st.caption("※ 기간과 무관한 '포트폴리오 현재 평가금액'을 기준으로 계산된 값입니다.")
+    st.caption("※ 기간과 무관한 '포트폴리오 현재 평가금액'을 기준으로 계산된 값입니다. (투자원금 대비 수익 표시)")
     # 사용한 환율 정보 표시 — 공통 유틸 사용
     st.caption(fx_caption(usd_krw, fx_source))
 
@@ -461,6 +461,7 @@ def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str,
         name='총 평가금액',
         # stackgroup='one',  <-- 제거: Area 차트가 0부터 시작하게 강제하는 원인
         line=dict(width=2, color='rgba(55, 128, 191, 1.0)'),
+        hovertemplate='%{y:,.0f} 원<extra></extra>'
     ))
 
     # 2) 투자원금 (Line)
@@ -470,6 +471,7 @@ def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str,
         mode='lines',
         name='투자원금 (Net Invested)',
         line=dict(width=2, color='rgba(255, 165, 0, 1.0)', dash='dot'), # 구분을 위해 dot or lighter color
+        hovertemplate='%{y:,.0f} 원<extra></extra>'
     ))
 
     # Y축 범위 계산 (데이터의 min/max 기준)
@@ -494,6 +496,73 @@ def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str,
     )
 
     st.plotly_chart(fig, width='stretch')
+
+    # === 평가금액 등락폭 차트 (Evaluation Amount Fluctuation) ===
+    st.markdown("---")
+    st.markdown("##### 📊 평가금액 등락폭")
+    
+    # 전체 기간 데이터 로드
+    full_snapshots = load_portfolio_daily_snapshots_krw(
+        user_id, account_id, None, None, usd_krw=usd_krw
+    )
+    full_df = calculate_portfolio_return_series_from_snapshots(full_snapshots)
+    
+    if not full_df.empty and len(full_df) > 1:
+        full_df["date"] = pd.to_datetime(full_df["date"])
+        full_df.set_index("date", inplace=True)
+        
+        # 1. 일별 등락폭 (최근 30일)
+        daily_df = full_df[["valuation_amount"]].copy()
+        daily_df["diff"] = daily_df["valuation_amount"].diff()
+        recent_daily = daily_df.tail(30).dropna()
+        
+        # 2. 월별 등락폭 (최근 12개월)
+        monthly_df = full_df[["valuation_amount"]].resample("ME").last()
+        monthly_df["diff"] = monthly_df["valuation_amount"].diff()
+        recent_monthly = monthly_df.tail(12).dropna()
+        
+        # 3. 연별 등락폭 (최근 5년)
+        yearly_df = full_df[["valuation_amount"]].resample("YE").last()
+        yearly_df["diff"] = yearly_df["valuation_amount"].diff()
+        recent_yearly = yearly_df.tail(5).dropna()
+        
+        col1, col2, col3 = st.columns(3)
+        
+        def plot_fluctuation(data, title, x_format):
+            # 한국 시장 기준: 상승은 빨간색, 하락은 파란색
+            colors = ["#ef4444" if val > 0 else "#3b82f6" for val in data["diff"]]
+            fig_bar = go.Figure(data=[go.Bar(
+                x=data.index,
+                y=data["diff"],
+                marker_color=colors,
+                hovertemplate='%{y:,.0f} 원<extra></extra>'
+            )])
+            fig_bar.update_layout(
+                title=dict(text=title, font=dict(size=14)),
+                height=250,
+                margin=dict(t=40, l=10, r=10, b=10),
+                showlegend=False,
+                xaxis=dict(tickformat=x_format)
+            )
+            # Y축 틱포맷 설정
+            fig_bar.update_yaxes(tickformat=",")
+            return fig_bar
+            
+        with col1:
+            if len(recent_daily) > 0:
+                st.plotly_chart(plot_fluctuation(recent_daily, "최근 30일 (일간)", "%m-%d"), width='stretch')
+            else:
+                st.info("일간 등락폭 데이터가 부족합니다.")
+        with col2:
+            if len(recent_monthly) > 0:
+                st.plotly_chart(plot_fluctuation(recent_monthly, "최근 12개월 (월간)", "%y-%m"), width='stretch')
+            else:
+                st.info("월간 등락폭 데이터가 부족합니다.")
+        with col3:
+            if len(recent_yearly) > 0:
+                st.plotly_chart(plot_fluctuation(recent_yearly, "최근 5년 (연간)", "%Y"), width='stretch')
+            else:
+                st.info("연간 등락폭 데이터가 부족합니다.")
 
 
 
@@ -768,6 +837,7 @@ def render_asset_return_section(
     )
     
     fig.update_yaxes(title_text="수익률(%)", secondary_y=False)
+    fig.update_yaxes(title_text=price_label if not price_df.empty else "자산 가격", secondary_y=True, tickformat=",.0f")
     
     # Streamlit에 표시
     st.plotly_chart(fig, width='stretch')
@@ -1724,6 +1794,7 @@ def render_realized_pnl_charts(user_id: str, account_id: str, start_date: str, e
             text=df_asset["realized_pnl_krw"].apply(lambda x: f"{x:,.0f}"),
             textposition='auto',
         ))
+        fig_asset.update_traces(hovertemplate='%{x:,.0f} 원<extra></extra>')
         fig_asset.update_layout(
             margin=dict(l=10, r=10, t=10, b=10),
             height=300,
@@ -1748,6 +1819,7 @@ def render_realized_pnl_charts(user_id: str, account_id: str, start_date: str, e
             color="display_name",
             text_auto='.2s'
         )
+        fig_month.update_traces(hovertemplate='%{y:,.0f} 원<extra></extra>')
         fig_month.update_layout(
             margin=dict(l=10, r=10, t=10, b=10),
             height=300,
@@ -1889,7 +1961,19 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
     cols = [c for c in display_order if c in df_display.columns] + [c for c in df_display.columns if c not in display_order]
     df_display = df_display[cols]
 
-    st.dataframe(df_display, width="stretch")
+    # === trade_type 기준 탭 필터링 ===
+    tabs = st.tabs(["전체", "매수", "매도", "입금", "출금"])
+    
+    with tabs[0]:
+        st.dataframe(df_display, width="stretch")
+    with tabs[1]:
+        st.dataframe(df_display[df_display["거래구분"] == "매수"], width="stretch")
+    with tabs[2]:
+        st.dataframe(df_display[df_display["거래구분"] == "매도"], width="stretch")
+    with tabs[3]:
+        st.dataframe(df_display[df_display["거래구분"] == "입금"], width="stretch")
+    with tabs[4]:
+        st.dataframe(df_display[df_display["거래구분"] == "출금"], width="stretch")
 
     with st.expander("✏️ 거래 수정/삭제"):
         tx_rows = df_raw.sort_values("transaction_date", ascending=False).to_dict("records")

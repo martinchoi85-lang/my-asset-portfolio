@@ -460,7 +460,8 @@ class TransactionService:
                 cash_amount = gross + fees
             else:
                 cash_trade_type = "DEPOSIT"
-                cash_amount = max(0.0, gross - fees)  # ✅ 음수 방어
+                cash_amount = max(0.0, gross - fees)  # 음수 방어
+                cash_amount = round(cash_amount, 2)   # 소수점 2자리까지 반올림
 
             cash_req = CreateTransactionRequest(
                 account_id=req.account_id,
@@ -471,7 +472,7 @@ class TransactionService:
                 price=1.0,                    # ✅ cash 단가 1 고정
                 fee=0.0,
                 tax=0.0,
-                memo=f"[AUTO] {req.trade_type} cash mirror (gross={gross}, fees={fees})",
+                memo=f"[AUTO] {req.trade_type} cash mirror (거래량={gross}, 수수료={fees})",
             )
 
             # ✅ cash 거래 insert
