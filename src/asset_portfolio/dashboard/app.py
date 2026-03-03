@@ -20,7 +20,8 @@ from asset_portfolio.dashboard.render import (
     render_period_performance_section, # 기간별 성과 분석
     render_asset_contribution_stacked_area,
     render_realized_pnl_charts,
-    render_portfolio_trend_chart
+    render_portfolio_trend_chart,
+    render_holding_period_section
 )
 from asset_portfolio.dashboard.transaction_editor import render_transaction_editor
 from asset_portfolio.dashboard.transaction_importer import render_transaction_importer
@@ -249,9 +250,13 @@ def render_main_dashboard():
             # 2. 자산별 거래 내역 조회
             render_asset_transaction_history(user_id, account_id)
             st.divider()
+            
             # 3. 전체 거래 내역 테이블
             render_transactions_table_section(user_id, account_id, start_date, end_date)
+            st.divider()
 
+            # 4. 자산별 보유기간 분석
+            render_holding_period_section(user_id, account_id)
 
 # --- Main app execution logic ---
 _inject_mobile_redirect()

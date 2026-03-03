@@ -47,18 +47,18 @@
     - [x] Group By 옵션 다양화: 자산군(Type), 통화(Currency), 시장(Market) 등
     - [ ] Drill-down 기능 (예: 주식 -> 미국주식 -> 기술주) (추후 과제)
 
-### 5. 🔍 TDF/펀드 세부 자산 분해 (Look-through)
+### 5. ⏳ 자산별 보유 기간(Holding Period) 분석
+- **[x] 완료**: 장기/단기 투자 성향 분석 및 세금 최적화 기초 자료 제공
+    - [x] 트랜잭션 내역 대상 FIFO(선입선출) 로직 적용으로 잔여 수량 분리
+    - [x] 잔여 로트별 최초 매수일(First Buy Date) 추적
+    - [x] 가중 평균 보유 기간(Weighted Average Holding Period) 계산
+    - [x] "Long-term vs Short-term" (1년 기준) 수량 비중 표 및 누적 막대 차트(Stacked Bar) 시각화 ('이력' 탭 하단)
+
+### 6. 🔍 TDF/펀드 세부 자산 분해 (Look-through)
 - **목표**: ETF/펀드 내의 실제 보유 자산까지 분석
 - **상세**:
     - 펀드/ETF의 구성 종목(Holdings) 데이터 모델링 필요
     - 예: TDF2050 보유 시 -> 주식 80%, 채권 20%로 분해하여 전체 포트폴리오 비중 계산
-
-### 6. ⏳ 자산별 보유 기간(Holding Period) 분석
-- **목표**: 장기/단기 투자 성향 분석 및 세금 최적화 기초 자료
-- **상세**:
-    - 최초 매수일(First Buy Date) 추적
-    - 가중 평균 보유 기간(Weighted Average Holding Period) 계산
-    - "Long-term vs Short-term" 비중 시각화
 
 ---
 

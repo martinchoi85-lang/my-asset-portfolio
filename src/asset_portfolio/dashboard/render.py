@@ -2316,4 +2316,77 @@ def render_asset_transaction_history(user_id: str, account_id: str):
         "메모를 통해 각 매수/매도의 이유를 확인할 수 있습니다."
     )
 
-
+def render_holding_period_section(user_id: str, account_id: str):
+    from asset_portfolio.backend.services.holding_period_service import calculate_holding_periods
+    import plotly.graph_objects as go
+    
+    st.subheader("⏳ 자산별 보유기간 분석 (Holding Period)")
+    st.caption("FIFO(선입선출) 기반 장기(1년 이상)/단기 보유 비중 및 평균 보유일수")
+    
+    if not account_id:
+        st.info("계좌를 선택해주세요.")
+        return
+        
+    df = calculate_holding_periods(user_id, account_id)
+    if df.empty:
+        st.info("거래 내역이 없어 분석할 수 없습니다.")
+        return
+        
+    # 데이터 처리
+    df["first_buy_date"] = pd.to_datetime(df["first_buy_date"]).dt.date
+    df["avg_holding_days"] = df["avg_holding_days"].astype(int)
+    
+    # 1. 시각화: 장기 vs 단기 비중 스택 바 차트
+    fig = go.Figure()
+    
+    # 단기 비중 추가
+    fig.add_trace(go.Bar(
+        x=df["name_kr"],
+        y=df["short_term_ratio"] * 100,
+        name="단기 (1년 미만)",
+        marker_color="#3b82f6",
+        hovertemplate='%{x}<br>단기 비중: %{y:.1f}%<extra></extra>'
+    ))
+    
+    # 장기 비중 추가
+    fig.add_trace(go.Bar(
+        x=df["name_kr"],
+        y=df["long_term_ratio"] * 100,
+        name="장기 (1년 이상)",
+        marker_color="#ef4444",
+        hovertemplate='%{x}<br>장기 비중: %{y:.1f}%<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        barmode='stack',
+        height=400,
+        margin=dict(t=30, l=10, r=10, b=50),
+        legend=dict(orientation="h", yanchor="top", y=1.1, xanchor="left", x=0),
+        yaxis_title="비중 (%)",
+        xaxis_title=""
+    )
+    
+    st.plotly_chart(fig, width='stretch')
+    
+    # 2. 표 형태 출력
+    display_df = df[["ticker", "name_kr", "remaining_quantity", "first_buy_date", "avg_holding_days", "long_term_qty", "short_term_qty"]].copy()
+    display_df.rename(columns={
+        "ticker": "티커",
+        "name_kr": "자산명",
+        "remaining_quantity": "잔여 수량",
+        "first_buy_date": "최초 매수일",
+        "avg_holding_days": "가중 평균 보유(일)",
+        "long_term_qty": "장기(1년 이상) 수량",
+        "short_term_qty": "단기 수량"
+    }, inplace=True)
+    
+    st.dataframe(
+        display_df.style.format({
+            "잔여 수량": "{:,.2f}",
+            "장기(1년 이상) 수량": "{:,.2f}",
+            "단기 수량": "{:,.2f}",
+            "가중 평균 보유(일)": "{:,d}"
+        }),
+        width='stretch',
+        hide_index=True
+    )
