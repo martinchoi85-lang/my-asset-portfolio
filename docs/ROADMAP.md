@@ -4,7 +4,8 @@
 - [x] **기본 데이터 구조 설계**: Accounts, Assets, Transactions, Daily Snapshots 테이블
 - [x] **대시보드 초기 구현**: 주요 자산 현황판, 도넛 차트
 - [x] **데이터 입력/수정**:
-    - [x] 거래 내역 추가/수정/삭제 (`transaction_editor.py`)
+    - [x] 거래 내역 개별 추가/수정/삭제 (`transaction_editor.py`)
+    - [x] 거래 내역 대량 업로드 (CSV/Excel/클립보드 붙여넣기) 및 파싱 고도화 (`transaction_importer.py`)
     - [x] 자산 정보 관리 (`asset_editor.py`)
     - [x] 스냅샷 수동 생성 및 조회 (`snapshot_editor.py`)
 - [x] **정기 매수 관리**:
