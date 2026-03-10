@@ -207,8 +207,9 @@ class TransactionService:
                     })
 
         if updates:
-            for chunk in TransactionService._chunk(updates, size=500):
-                supabase.table("transactions").upsert(chunk, on_conflict="id").execute()
+            # 부분 필드 변경 시 upsert를 사용하면 나머지 필드가 null로 덮어씌워질 수 있으므로 단건 update 사용
+            for u in updates:
+                supabase.table("transactions").update({"realized_pnl": u["realized_pnl"]}).eq("id", u["id"]).execute()
 
     @staticmethod
     def rebuild_daily_snapshots_for_asset(
