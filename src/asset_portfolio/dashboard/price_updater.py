@@ -6,21 +6,9 @@ from asset_portfolio.dashboard.transaction_editor import _load_assets_df
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
 from asset_portfolio.backend.services.price_updater_service import PriceUpdaterService
 
-        
-def render_price_updater():
-    st.title("💹 Price Updater (yfinance + krx)")
 
-    # ✅ 실행 중 플래그
-    if "price_busy" not in st.session_state:
-        st.session_state["price_busy"] = False
-
-    df = _load_assets_df()
-    if df.empty:
-        st.error("assets 테이블에 데이터가 없습니다.")
-        return
-
-    # ✅ 필터 섹션: stale/failed 자산만 빠르게 골라내기
-    st.subheader("필터")
+def _render_auto_updater(df: pd.DataFrame):
+    st.subheader("필터 (자동업데이트 전용)")
     colA, colB, colC = st.columns([1, 1, 1])
 
     with colA:
@@ -35,8 +23,6 @@ def render_price_updater():
     if not show_cash:
         df = df[df["asset_type"].fillna("").str.lower() != "cash"]
 
-    # ✅ 스테일 판정: price_updated_at이 NULL이거나 N일보다 오래되면 stale
-    # - timezone이 섞일 수 있으니 UTC 기준으로 비교
     now_utc = pd.Timestamp.utcnow()
     df["price_updated_at"] = pd.to_datetime(df.get("price_updated_at"), errors="coerce", utc=True)
     df["is_stale"] = df["price_updated_at"].isna() | ((now_utc - df["price_updated_at"]) > pd.Timedelta(days=int(stale_days)))
@@ -62,7 +48,7 @@ def render_price_updater():
     auto_rebuild = st.checkbox("가격 업데이트 후 스냅샷 자동 리빌드", value=True)
     include_krx = st.checkbox("KRX price source도 함께 업데이트", value=True)
 
-    run_clicked = st.button("가격 업데이트 실행", type="primary", disabled=(len(selected_ids) == 0))
+    run_clicked = st.button("자동 가격 업데이트 실행", type="primary", disabled=(len(selected_ids) == 0) or st.session_state.get("price_busy", False))
 
     if run_clicked:
         st.session_state["price_busy"] = True
@@ -104,8 +90,6 @@ def render_price_updater():
 
             if include_krx and source_asset_ids:
                 with st.spinner("KRX price source 업데이트 중..."):
-                    # Future sources (deposit/fund/crawling) should be handled by adding
-                    # new source_type branches in PriceUpdaterService._fetch_price_from_sources.
                     source_result = PriceUpdaterService.update_asset_prices_for_date(
                         asset_ids=source_asset_ids,
                         price_date=date.today(),
@@ -158,3 +142,113 @@ def render_price_updater():
             st.error(f"실행 실패: {e}")
         finally:
             st.session_state["price_busy"] = False
+
+
+def _render_manual_updater(df: pd.DataFrame):
+    st.subheader("수동 자산 가격 입력")
+    st.caption("price_source가 **manual_price**인 펀드, 주식 등 **수량과 단가가 분리된 자산**의 기준가를 직접 입력합니다.")
+    
+    # Filter manual assets that are set to manual_price
+    manual_assets = df[(df["price_source"].fillna("").str.lower() == "manual_price")]
+    
+    if manual_assets.empty:
+        st.info("수동으로 단가를 입력할 자산이 없습니다. (단가 입력을 원하시면 자산 편집기에서 price_source를 'manual_price'로 변경하세요. 일반 예적금/펀드의 총 잔액 입력은 '스냅샷 수정' 메뉴를 이용하세요)")
+        return
+        
+    price_date = st.date_input("기준일 (가격 업데이트 날짜)", value=date.today())
+    
+    edit_df = manual_assets[["id", "name_kr", "ticker", "currency", "current_price"]].copy()
+    edit_df["입력 단가(close_price)"] = edit_df["current_price"]
+    
+    st.caption("아래 표에서 '입력 단가'를 수정한 후 저장 버튼을 누르세요. (저장 시 거래내역 수량을 바탕으로 스냅샷이 자동 리빌드됩니다)")
+    edited = st.data_editor(
+        edit_df,
+        width='stretch',
+        disabled=st.session_state.get("price_busy", False),
+        column_config={
+            "id": st.column_config.NumberColumn("ID", disabled=True),
+            "name_kr": st.column_config.TextColumn("자산명", disabled=True),
+            "ticker": st.column_config.TextColumn("Ticker", disabled=True),
+            "currency": st.column_config.TextColumn("통화", disabled=True),
+            "current_price": st.column_config.NumberColumn("기존 단가", disabled=True),
+            "입력 단가(close_price)": st.column_config.NumberColumn("입력 단가", min_value=0.0, step=10.0),
+        }
+    )
+    
+    if st.button("수동 가격 저장 및 스냅샷 리빌드", type="primary", disabled=st.session_state.get("price_busy", False)):
+        st.session_state["price_busy"] = True
+        try:
+            with st.spinner("저장 중..."):
+                supabase = get_supabase_client()
+                
+                prices_to_upsert = []
+                asset_ids_to_rebuild = []
+                now_iso = pd.Timestamp.utcnow().isoformat()
+                
+                for idx, row in edited.iterrows():
+                    aid = int(row["id"])
+                    new_price = float(row["입력 단가(close_price)"])
+                    old_price = float(row["current_price"])
+                    
+                    if new_price <= 0:
+                        continue
+                        
+                    # 1. Update assets.current_price
+                    supabase.table("assets").update({
+                        "current_price": new_price,
+                        "price_updated_at": now_iso,
+                        "price_update_status": "ok",
+                        "price_update_error": None
+                    }).eq("id", aid).execute()
+                    
+                    # 2. Insert into asset_prices
+                    prices_to_upsert.append({
+                        "price_date": price_date.isoformat(),
+                        "asset_id": aid,
+                        "close_price": new_price,
+                        "currency": row.get("currency") or "",
+                        "source": "manual_entry",
+                        "fetched_at": now_iso
+                    })
+                    
+                    if aid not in asset_ids_to_rebuild:
+                        asset_ids_to_rebuild.append(aid)
+                    
+                if prices_to_upsert:
+                    supabase.table("asset_prices").upsert(
+                        prices_to_upsert,
+                        on_conflict="price_date,asset_id"
+                    ).execute()
+                    
+                rebuilt_rows = 0
+                if asset_ids_to_rebuild:
+                    summary = PriceUpdaterService.rebuild_snapshots_for_updated_assets(asset_ids_to_rebuild)
+                    rebuilt_rows = summary.get("rebuilt_total_rows", 0)
+                    
+            st.success(f"수동 가격 저장 및 스냅샷 리빌드 완료! (영향 받은 스냅샷: {rebuilt_rows} 건)")
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"오류: {e}")
+        finally:
+            st.session_state["price_busy"] = False
+
+
+def render_price_updater():
+    st.title("💹 자산 가격 업데이트 (자동/수동)")
+
+    if "price_busy" not in st.session_state:
+        st.session_state["price_busy"] = False
+
+    df = _load_assets_df()
+    if df.empty:
+        st.error("assets 테이블에 데이터가 없습니다.")
+        return
+
+    tab1, tab2 = st.tabs(["자동 업데이트 (yfinance / KRX)", "수동 단가 입력 (펀드 / 기타)"])
+    
+    with tab1:
+        _render_auto_updater(df)
+        
+    with tab2:
+        _render_manual_updater(df)

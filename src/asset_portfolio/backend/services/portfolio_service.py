@@ -100,14 +100,14 @@ def load_portfolio_daily_snapshots_krw(
     start_date: str,
     end_date: str,
     usd_krw: float = 1.0,
+    fx_history_df: "pd.DataFrame" = None,
 ) -> list:
     """
     daily_snapshots를 date 기준으로 집계하되,
-    USD 자산은 usd_krw 환율을 적용해 KRW로 환산한 후 합산한다.
-
-    기존 load_portfolio_daily_snapshots()와 인터페이스 동일.
-    트렌드 차트, 기간 성과 등 KRW 기준 시계열이 필요한 컴포넌트에서 사용.
+    USD 자산은 fx_history_df 기간별 환율을 적용하여 KRW로 환산한 후 합산한다.
+    fx_history_df가 없으면 usd_krw 단일 환율을 적용한다 (Legacy fallback).
     """
+    import pandas as pd
     q = build_daily_snapshots_query(
         # currency 컬럼을 포함해 조회
         select_cols="date, purchase_amount, valuation_amount, currency",
@@ -118,25 +118,41 @@ def load_portfolio_daily_snapshots_krw(
     )
     snapshots = fetch_all_pagination(q)
 
-    daily_map: dict = {}
-    for r in snapshots:
-        d = r["date"]
-        val = float(r.get("valuation_amount") or 0)
-        buy = float(r.get("purchase_amount") or 0)
-        ccy = str(r.get("currency") or "KRW").strip().upper()
+    if not snapshots:
+        return []
 
-        # USD 행은 KRW로 환산
-        if ccy == "USD":
-            val *= usd_krw
-            buy *= usd_krw
+    df = pd.DataFrame(snapshots)
 
-        if d not in daily_map:
-            daily_map[d] = {"date": d, "valuation_amount": 0.0, "purchase_amount": 0.0}
-        daily_map[d]["valuation_amount"] += val
-        daily_map[d]["purchase_amount"] += buy
+    # 🌟 Historical FX 적용
+    if fx_history_df is not None and not fx_history_df.empty:
+        from asset_portfolio.backend.services.fx_service import FxService
+        df = FxService.apply_historical_fx_to_df(
+            df=df,
+            fx_history_df=fx_history_df,
+            amount_cols=["valuation_amount", "purchase_amount"],
+            currency_col="currency",
+            date_col="date"
+        )
+    else:
+        # 단일 환율 적용 (Legacy fallback)
+        df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce").fillna(0)
+        df["purchase_amount"] = pd.to_numeric(df["purchase_amount"], errors="coerce").fillna(0)
+        
+        usd_mask = df["currency"].astype(str).str.strip().str.upper() == "USD"
+        df.loc[usd_mask, "valuation_amount"] = df.loc[usd_mask, "valuation_amount"] * usd_krw
+        df.loc[usd_mask, "purchase_amount"] = df.loc[usd_mask, "purchase_amount"] * usd_krw
 
-    result = list(daily_map.values())
-    result.sort(key=lambda x: x["date"])
+    # =========================
+    # date 기준으로 DataFrame 합산
+    # =========================
+    # Date를 문자열로 포맷 맞추기 (JSON Serialization 위해)
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    
+    # date 기준으로 합계 계산
+    grouped = df.groupby("date", as_index=False)[["valuation_amount", "purchase_amount"]].sum()
+    grouped.sort_values("date", inplace=True)
+    
+    result = grouped.to_dict(orient="records")
     return result
 
 
@@ -226,22 +242,15 @@ def calculate_period_performance(
     account_id: str,
     start_date: str,
     end_date: str,
+    usd_krw: float = 1.0,
+    fx_history_df: "pd.DataFrame" = None
 ) -> Dict[str, float]:
     """
-    기간별 성과 분석 (Cash Flow 고려)
-    
-    Returns:
-        {
-            "start_value": float,
-            "end_value": float,
-            "net_flow": float,     # 입금 - 출금
-            "investment_gain": float, # 기말 - 기초 - 순입출금
-            "return_rate": float,   # Modified Dietz or Simple Return
-        }
+    기간별 성과 분석 (Cash Flow 및 외환 변동 고려)
     """
     
-    # 0. Data Fetching
-    snapshots = load_portfolio_daily_snapshots(user_id, account_id, start_date, end_date)
+    # 0. Data Fetching (KRW 전환 버전으로 교체)
+    snapshots = load_portfolio_daily_snapshots_krw(user_id, account_id, start_date, end_date, usd_krw, fx_history_df)
     if not snapshots:
         return {
             "start_value": 0.0,
@@ -256,8 +265,8 @@ def calculate_period_performance(
     start_row = snapshots[0]
     end_row = snapshots[-1]
     
-    start_val = float(start_row["valuation_amount"] or 0)
-    end_val = float(end_row["valuation_amount"] or 0)
+    start_val = float(start_row.get("valuation_amount") or 0)
+    end_val = float(end_row.get("valuation_amount") or 0)
     
     # 2. Cash Flow
     # start_date < date <= end_date 범위의 입출금 합산
@@ -295,11 +304,23 @@ def calculate_period_performance(
             
         q = float(row["quantity"] or 0)
         t_type = row["trade_type"]
+        asset = row.get("assets") or {}
+        ccy = str(asset.get("currency", "KRW")).strip().upper()
+        
+        flow_krw = q
+        # 달러 입출금은 해당 날짜의 환율로 변환
+        if ccy == "USD":
+            if fx_history_df is not None and not fx_history_df.empty:
+                match = fx_history_df[fx_history_df["date"] == td]
+                rate = match["fx_rate"].iloc[0] if not match.empty else usd_krw
+                flow_krw = q * rate
+            else:
+                flow_krw = q * usd_krw
         
         if t_type == "DEPOSIT":
-            net_flow += q
+            net_flow += flow_krw
         elif t_type == "WITHDRAW":
-            net_flow -= q
+            net_flow -= flow_krw
             
     # 3. Investment Gain & Return
     investment_gain = end_val - start_val - net_flow
@@ -327,6 +348,7 @@ def get_realized_pnl_by_period(
     start_date: str,
     end_date: str,
     usd_krw: float = 1.0,
+    fx_history_df: "pd.DataFrame" = None
 ) -> pd.DataFrame:
     """
     선택한 기간 동안 발생한 실현손익 내역을 조회하고 DataFrame으로 반환한다.
@@ -369,11 +391,6 @@ def get_realized_pnl_by_period(
         pnl = float(pnl)
         asset = r.get("assets") or {}
         ccy = str(asset.get("currency", "KRW")).strip().upper()
-        
-        # 환율 적용
-        if ccy == "USD":
-            pnl *= usd_krw
-            
         # date 파싱 (YYYY-MM-DD 형식으로 변환)
         t_date_str = r.get("transaction_date", "")
         if "T" in t_date_str:
@@ -381,6 +398,16 @@ def get_realized_pnl_by_period(
         else:
             t_date = t_date_str[:10]
             
+        # 환율 적용
+        if ccy == "USD":
+            if fx_history_df is not None and not fx_history_df.empty:
+                t_date_obj = datetime.strptime(t_date, "%Y-%m-%d").date()
+                match = fx_history_df[fx_history_df["date"] == t_date_obj]
+                rate = match["fx_rate"].iloc[0] if not match.empty else usd_krw
+                pnl *= rate
+            else:
+                pnl *= usd_krw
+
         data.append({
             "transaction_date": t_date,
             "asset_id": r.get("asset_id"),

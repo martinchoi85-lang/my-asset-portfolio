@@ -165,7 +165,7 @@ def get_period_cash_flow(user_id: str, account_id: str, start_date: str, end_dat
     
     q = (
         supabase.table("transactions")
-        .select("transaction_date, trade_type, quantity, price, asset_id")
+        .select("transaction_date, trade_type, quantity, price, asset_id, assets!inner(currency)")
         .in_("trade_type", ["DEPOSIT", "WITHDRAW"])
         .order("transaction_date")
     )

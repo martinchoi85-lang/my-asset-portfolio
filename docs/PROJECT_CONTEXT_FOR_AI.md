@@ -116,21 +116,22 @@ Dashboard UI / Mobile UI
 ### Backend 서비스 계층
 
 **Infrastructure (`backend/infra/`):**
-- Supabase 연결 관리
-- DB 세션 관리
+- `supabase_client.py`: Supabase 연결 및 DB 세션 관리
+- `query.py`: 대규모 데이터 조회를 위한 Pagination 등의 로직
 
 **Services (`backend/services/`):**
-- `transaction_service.py`: 거래 추가/수정/삭제 로직
+- `transaction_service.py`: 거래 추가/수정/삭제 로직 (실현손익 계산 포함)
 - `asset_service.py`: 자산 메타데이터 관리
 - `daily_snapshot_generator.py`: 스냅샷 생성 엔진
-- `portfolio_calculator.py`: 포트폴리오 계산 로직 (보유량, 평단가, 수익률)
+- `portfolio_calculator.py`: 포트폴리오 계산 로직 (보유량, 평단가, 수익률, 세금/수수료)
 - `portfolio_service.py`: 포트폴리오 조회 서비스
 - `portfolio_weight_service.py`: 자산 비중 계산
 - `price_updater_service.py`: 가격 업데이트 로직
 - `krx_price_fetcher.py`: KRX 데이터 수집
 - `manual_cost_basis_service.py`: Manual 자산 원금 관리
 - `benchmark_service.py`: 벤치마크 비교 분석
-- `fx_service.py`: 환율 처리
+- `fx_service.py`: 환율 처리 서비스
+- `holding_period_service.py`: 자산별 보유 기간 및 장단기 분석 (FIFO 기반)
 - `snapshot_frame.py`: 스냅샷 데이터프레임 처리
 
 ### 앱별 특징
@@ -138,14 +139,14 @@ Dashboard UI / Mobile UI
 **Dashboard (`dashboard/`):**
 - 데스크톱/웹 브라우저용 풀 버전
 - 모든 편집 기능 포함 (거래, 자산, 스냅샷, 정기매수)
-- 상세 차트 및 분석
-- 파일: `app.py`, `render.py`, `transaction_editor.py`, `asset_editor.py`, `snapshot_editor.py`, `recurring_order_editor.py`, `price_updater.py`, `transaction_importer.py`
+- 상세 차트 및 분석 (기간별 분석, 실현손익, 보유 기간 등)
+- 주요 파일: `app.py`, `render.py`, `transaction_editor.py`, `asset_editor.py`, `snapshot_editor.py`, `recurring_order_editor.py`, `price_updater.py`, `transaction_importer.py`, `fx_utils.py`, `data.py`
 
 **Mobile (`mobile/`):**
 - 모바일 전용 간소화 UI
 - 조회 중심 (편집 기능 최소화)
 - 빠른 로딩과 간결한 인터페이스
-- 파일: `app.py`, `data.py`
+- 주요 파일: `app.py`, `data.py`
 
 ---
 

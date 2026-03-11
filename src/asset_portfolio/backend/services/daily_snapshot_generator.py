@@ -3,15 +3,6 @@ from asset_portfolio.backend.services.portfolio_calculator import (
     calculate_daily_snapshots_for_asset
 )
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
-
-
-from datetime import date
-from asset_portfolio.backend.infra.supabase_client import get_supabase_client
-from asset_portfolio.backend.services.portfolio_calculator import (
-    calculate_daily_snapshots_for_asset
-)
-
-
 def generate_daily_snapshots(account_id: str, start_date: date, end_date: date):
     """
     특정 account에 대해

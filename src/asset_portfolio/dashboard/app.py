@@ -149,13 +149,8 @@ def render_main_dashboard():
         mobile_url = os.environ.get("MOBILE_URL")
         title_cols = st.columns([0.05, 0.95], vertical_alignment="center")
         with title_cols[0]:
-            if st.button("📊", help="모바일 페이지로 전환", disabled=not mobile_url):
-                target = f"{mobile_url.rstrip('/')}/?from=streamlit"
-                components.html(
-                    f"<script>window.location.replace('{target}');</script>",
-                    height=0,
-                )
-                st.stop()
+            # 모바일 리다이렉션 기능 제거, 아이콘만 남김
+            st.markdown("<h2 style='text-align: center; margin: 0;'>📊</h2>", unsafe_allow_html=True)
         with title_cols[1]:
             st.title(portfolio_title)
         

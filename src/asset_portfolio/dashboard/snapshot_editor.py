@@ -17,6 +17,7 @@ def _load_manual_assets_df() -> pd.DataFrame:
         return df
 
     df["price_source_norm"] = df["price_source"].fillna("").str.lower().str.strip()
+    # 'manual' (총액 입력 기반) 인 자산들만 스냅샷 에디터에 표시
     df = df[df["price_source_norm"].isin(MANUAL_TYPES)].copy()
 
     # ✅ 표시 라벨: ticker만 애매하면 name_kr가 더 중요하므로 둘 다 노출 + id도 붙임

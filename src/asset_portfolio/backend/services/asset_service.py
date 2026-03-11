@@ -63,3 +63,22 @@ class AssetService:
         if not row:
             raise RuntimeError("assets update failed")
         return row
+
+    @staticmethod
+    def get_assets_lookup_df() -> "pd.DataFrame":
+        """
+        asset_id → 자산명(name_kr) 매핑 및 자산 타입 정보를 위한 전체 목록 조회
+        """
+        import pandas as pd
+        supabase = get_supabase_client()
+        resp = (
+            supabase.table("assets")
+            .select("id, name_kr, ticker, asset_type, currency, market")
+            .execute()
+        )
+        rows = resp.data or []
+        if not rows:
+            return pd.DataFrame(columns=["asset_id", "name_kr", "ticker", "asset_type", "currency", "market"])
+
+        df = pd.DataFrame(rows).rename(columns={"id": "asset_id"})
+        return df

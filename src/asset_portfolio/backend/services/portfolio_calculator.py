@@ -304,48 +304,11 @@ def calculate_asset_return_series_from_snapshots(
 
     df = pd.DataFrame(snapshots)
 
-    # =========================
-    # 기준 매입금액 (누적 기준점)
-    # =========================
-    # - 일반적으로 첫 날의 purchase_amount를 기준으로 삼는다
-    # - 현금성 자산, 단일 보유 자산 모두 동일한 규칙 적용
-    # base_purchase_amount = snapshots[0]["purchase_amount"]
-
-    # # 0으로 나누는 상황 방지 (이론적으로는 없어야 함)
-    # if base_purchase_amount == 0:
-    #     base_purchase_amount = 1
-
-    # # =========================
-    # # 날짜별 누적 수익률 계산
-    # # =========================
-    # for snap in snapshots:
-    #     purchase_amount = snap["purchase_amount"]
-    #     valuation_amount = snap["valuation_amount"]
-
-    #     # 누적 수익률 계산
-    #     # (평가금액 - 기준 매입금액) / 기준 매입금액
-    #     cumulative_return = (
-    #         valuation_amount - base_purchase_amount
-    #     ) / base_purchase_amount
-
-    #     result.append({
-    #         "date": snap["date"],
-    #         "purchase_amount": purchase_amount,
-    #         "valuation_amount": valuation_amount,
-    #         "cumulative_return": cumulative_return
-    #     })
-    # 
-    # return result
-
     base_purchase_amount = df.iloc[0]["purchase_amount"]
 
     # 0으로 나누는 상황 방지 (이론적으로는 없어야 함)
     if base_purchase_amount == 0:
         base_purchase_amount = 1
-
-    # df[cumulative_return = (
-    #         valuation_amount - base_purchase_amount
-    #     ) / base_purchase_amount
 
     df["date"] = pd.to_datetime(df["date"])
     df["valuation_amount"] = df["valuation_amount"].astype(float)
@@ -431,23 +394,7 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
     supabase = get_supabase_client()
 
     # =========================
-    # 1) 거래 조회(기존과 동일)
-    # =========================
-    tx_resp = (
-        supabase.table("transactions")
-        .select("trade_type, quantity, price, transaction_date")
-        .eq("asset_id", asset_id)
-        .eq("account_id", account_id)
-        .order("transaction_date")
-        .execute()
-    )
-    transactions = tx_resp.data or []
-    if not transactions:
-        return []
-
-    # =========================
-    # 2) 자산 메타 조회: currency, asset_type, current_price
-    # ✅ valuation_price를 current_price로 쓰기 위해 current_price를 반드시 가져옵니다.
+    # 1) 자산 메타 조회: currency, asset_type, current_price
     # =========================
     asset_resp = (
         supabase.table("assets")
@@ -459,24 +406,92 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
     asset_row = asset_resp.data or {}
     currency = asset_row.get("currency")
     asset_type = (asset_row.get("asset_type") or "").lower()
-
-    # ✅ 현금 자산은 평가단가 1 고정
     is_cash = asset_type == "cash"
-
-    # ✅ 비현금 자산은 assets.current_price를 평가단가로 사용 (V1.1)
-    # - 주의: 이 값은 과거 날짜에도 동일하게 적용됩니다. (가격 히스토리 테이블 도입 전까지의 한계)
     current_price = float(asset_row.get("current_price") or 0)
 
-    # 가격 히스토리를 기반으로 날짜별 평가단가를 계산한다.
+    # =========================
+    # 2) Base State 로드 (Incremental Build)
+    # =========================
+    prior_snapshot_resp = (
+        supabase.table("daily_snapshots")
+        .select("date, quantity, purchase_amount")
+        .eq("account_id", account_id)
+        .eq("asset_id", asset_id)
+        .lt("date", start_date.isoformat())
+        .order("date", desc=True)
+        .limit(1)
+        .execute()
+    )
+    prior_rows = prior_snapshot_resp.data or []
+    current_qty = 0.0
+    total_purchase_amount = 0.0
+
+    if prior_rows:
+        current_qty = float(prior_rows[0].get("quantity", 0.0))
+        total_purchase_amount = float(prior_rows[0].get("purchase_amount", 0.0))
+        tx_start_date = _to_date(prior_rows[0]["date"]) + timedelta(days=1)
+    else:
+        tx_start_date = date(1970, 1, 1)
+
+    # =========================
+    # 3) 거래 조회 (시작점 필터 적용)
+    # =========================
+    tx_resp = (
+        supabase.table("transactions")
+        .select("trade_type, quantity, price, transaction_date")
+        .eq("asset_id", asset_id)
+        .eq("account_id", account_id)
+        .gte("transaction_date", tx_start_date.isoformat())
+        .lte("transaction_date", end_date.isoformat())
+        .order("transaction_date")
+        .execute()
+    )
+    raw_transactions = tx_resp.data or []
+
+    # start_date 전까지의 누락/중간 거래 Fast-Forward
+    transactions = []
+    for tx in raw_transactions:
+        tx_date = _to_date(tx["transaction_date"])
+        if tx_date < start_date:
+            trade_type = tx["trade_type"]
+            qty = float(tx["quantity"])
+            price = float(tx["price"])
+
+            if trade_type in ("BUY", "INIT"):
+                current_qty += qty
+                total_purchase_amount += qty * price
+            elif trade_type == "SELL":
+                avg_price = (total_purchase_amount / current_qty) if current_qty > 0 else 0.0
+                total_purchase_amount -= avg_price * qty
+                current_qty -= qty
+                if current_qty <= 0:
+                    current_qty = 0.0
+                    total_purchase_amount = 0.0
+            elif trade_type == "DEPOSIT":
+                if not is_cash:
+                    raise ValueError("DEPOSIT은 cash 자산에서만 허용됩니다.")
+                current_qty += qty
+                total_purchase_amount += qty * price
+            elif trade_type == "WITHDRAW":
+                if not is_cash:
+                    raise ValueError("WITHDRAW는 cash 자산에서만 허용됩니다.")
+                current_qty -= qty
+                total_purchase_amount -= qty * price
+                if current_qty <= 0:
+                    current_qty = 0.0
+                    total_purchase_amount = 0.0
+        else:
+            transactions.append(tx)
+
+    if not transactions and current_qty <= 0:
+        return []
+
+    # =========================
+    # 4) 가격 조회 (기존과 동일)
+    # =========================
     price_history = _load_asset_price_history(asset_id, start_date, end_date)
     price_idx = 0
     last_price = None
-
-    # =========================
-    # 3) 누적 상태 변수(기존과 동일)
-    # =========================
-    current_qty = 0.0
-    total_purchase_amount = 0.0
 
     snapshots = []
     current_date = start_date
@@ -556,11 +571,10 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
             # ✅ CASH는 단가 1 고정 (잔고를 quantity로 들고 가므로)
             valuation_price = 1.0
         else:
-            # 날짜별 가격이 있으면 우선 사용하고, 없으면 current_price를 fallback으로 사용
+            # 날짜별 가격(last_price)이 있으면 우선 사용하고, 없으면 매입단가(purchase_price)를 Fallback으로 사용
+            # (과거 날짜에 최신 가격인 current_price를 적용하면 수익률이 왜곡되므로 수정)
             if last_price is not None and float(last_price) > 0:
                 valuation_price = float(last_price)
-            elif current_price is not None and float(current_price) > 0:
-                valuation_price = float(current_price)
             else:
                 # ✅ fallback: 평균매입단가로 평가(최소한 0이 되지 않게)
                 valuation_price = float(purchase_price)

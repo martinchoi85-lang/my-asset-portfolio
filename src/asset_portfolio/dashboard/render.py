@@ -30,9 +30,9 @@ from asset_portfolio.backend.services.transaction_service import (
     CreateTransactionRequest,
 )
 from asset_portfolio.backend.infra import query
-from asset_portfolio.dashboard.data import load_assets_lookup
+from asset_portfolio.dashboard.data import load_assets_lookup, get_usdkrw_rate
 from asset_portfolio.backend.infra.query import fetch_all_pagination, load_asset_prices
-from asset_portfolio.dashboard.fx_utils import get_usdkrw_rate, apply_fx_to_df, fx_caption
+from asset_portfolio.backend.services.fx_service import FxService
 
 
 @st.cache_data(ttl=600)
@@ -112,7 +112,7 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
     df["assets.underlying_asset_class"] = df["assets.underlying_asset_class"].fillna("미분류")
 
     # ✅ USD 자산 KRW 환산
-    df = apply_fx_to_df(df, usd_krw, amount_cols=["valuation_amount"], currency_col="currency")
+    df = FxService.apply_fx_to_df(df, usd_krw, amount_cols=["valuation_amount"], currency_col="currency")
 
     df = df.rename(
         columns={
@@ -323,27 +323,26 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
     # =========================
     @st.cache_data(ttl=600)
     def _load_total_realized_pnl(u_id, acc_id, _usd_krw):
-        supabase = get_supabase_client()
-        q = supabase.table("transactions").select("realized_pnl, assets!inner(currency)")
-        if acc_id and acc_id != "__ALL__":
-            q = q.eq("account_id", acc_id)
-        else:
-            user_accounts = query.get_accounts(u_id)
-            user_account_ids = [acc['id'] for acc in user_accounts]
-            if user_account_ids:
-                q = q.in_("account_id", user_account_ids)
+        from asset_portfolio.backend.services.portfolio_service import get_realized_pnl_by_period
+        from asset_portfolio.dashboard.data import get_historical_usdkrw_rate
+        import pandas as pd
+        from datetime import datetime
         
-        rows = fetch_all_pagination(q)
-        total_realized = 0.0
-        for r in rows:
-            p_val = float(r.get("realized_pnl") or 0.0)
-            asset = r.get("assets") or {}
-            currency = (asset.get("currency") or "KRW").upper()
-            if currency == "USD":
-                total_realized += p_val * _usd_krw
-            else:
-                total_realized += p_val
-        return total_realized
+        t_start = pd.to_datetime("2020-01-01").date()
+        t_end = datetime.now().date()
+        fx_hist_df = get_historical_usdkrw_rate(t_start, t_end)
+        
+        df = get_realized_pnl_by_period(
+            user_id=u_id,
+            account_id=acc_id,
+            start_date=None,
+            end_date=None,
+            usd_krw=_usd_krw,
+            fx_history_df=fx_hist_df
+        )
+        if df.empty:
+            return 0.0
+        return df["realized_pnl_krw"].sum()
 
     total_realized_krw = _load_total_realized_pnl(user_id, account_id, usd_krw)
 
@@ -359,7 +358,7 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
 
     st.caption("※ 기간과 무관한 '포트폴리오 현재 평가금액'을 기준으로 계산된 값입니다. (투자원금 대비 수익 표시)")
     # 사용한 환율 정보 표시 — 공통 유틸 사용
-    st.caption(fx_caption(usd_krw, fx_source))
+    st.caption(FxService.fx_caption(usd_krw, fx_source))
 
 
 def render_period_performance_section(user_id: str, account_id: str, start_date: str, end_date: str):
@@ -373,8 +372,18 @@ def render_period_performance_section(user_id: str, account_id: str, start_date:
     if not account_id:
         return
 
-    # 데이터 계산
-    res = calculate_period_performance(user_id, account_id, start_date, end_date)
+    # USD/KRW 과거 환율 가져오기
+    from asset_portfolio.dashboard.data import get_historical_usdkrw_rate
+    from datetime import datetime
+    import pandas as pd
+    
+    t_start = pd.to_datetime(start_date).date() if start_date else pd.to_datetime("2020-01-01").date()
+    t_end = pd.to_datetime(end_date).date() if end_date else datetime.now().date()
+    fx_hist_df = get_historical_usdkrw_rate(t_start, t_end)
+    usd_krw, _ = get_usdkrw_rate()
+
+    # 데이터 계산 (과거 환율 반영)
+    res = calculate_period_performance(user_id, account_id, start_date, end_date, usd_krw=usd_krw, fx_history_df=fx_hist_df)
     
     start_val = res["start_value"]
     end_val = res["end_value"]
@@ -437,12 +446,21 @@ def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str,
         st.info("계좌를 선택해주세요.")
         return
 
-    # USD/KRW 환율 중앙 조회
+    # USD/KRW 환율 중앙 조회 (최신)
     usd_krw, fx_source = get_usdkrw_rate()
+    
+    # 🌟 과거 환율 조회 연동
+    from asset_portfolio.dashboard.data import get_historical_usdkrw_rate
+    from datetime import datetime
+    import pandas as pd
+    
+    t_start = pd.to_datetime(start_date).date() if start_date else pd.to_datetime("2020-01-01").date()
+    t_end = pd.to_datetime(end_date).date() if end_date else datetime.now().date()
+    fx_hist_df = get_historical_usdkrw_rate(t_start, t_end)
 
-    # ✅ KRW 환산 포함 시계열 조회
+    # ✅ KRW 환산 포함 시계열 조회 (과거 환율 반영)
     snapshots = load_portfolio_daily_snapshots_krw(
-        user_id, account_id, start_date, end_date, usd_krw=usd_krw
+        user_id, account_id, start_date, end_date, usd_krw=usd_krw, fx_history_df=fx_hist_df
     )
     df = calculate_portfolio_return_series_from_snapshots(snapshots)
 
@@ -511,9 +529,12 @@ def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str,
     st.markdown("---")
     st.markdown("##### 📊 평가금액 등락폭")
     
-    # 전체 기간 데이터 로드
+    # 전체 기간 데이터 로드 (과거 환율 반영)
+    full_t_start = pd.to_datetime("2020-01-01").date()
+    full_fx_hist_df = get_historical_usdkrw_rate(full_t_start, t_end)
+    
     full_snapshots = load_portfolio_daily_snapshots_krw(
-        user_id, account_id, None, None, usd_krw=usd_krw
+        user_id, account_id, None, None, usd_krw=usd_krw, fx_history_df=full_fx_hist_df
     )
     full_df = calculate_portfolio_return_series_from_snapshots(full_snapshots)
     
@@ -940,7 +961,7 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
     #    - 단가(valuation_price, purchase_price)는 원통화 유지 (표에서 '통화' 콜럼으로 달러임을 명시)
     #    - 수익금액 / 수익률은 환산된 금액 기준으로 자동 재계산됨
     usd_krw, fx_source = get_usdkrw_rate()
-    df = apply_fx_to_df(
+    df = FxService.apply_fx_to_df(
         df, usd_krw,
         amount_cols=["valuation_amount", "purchase_amount"],
         currency_col="currency",
@@ -1013,7 +1034,7 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
         "자산 타입",
     ]
 
-    st.caption(f"기준일: {latest_date}  |  {fx_caption(usd_krw, fx_source)}")
+    st.caption(f"기준일: {latest_date}  |  {FxService.fx_caption(usd_krw, fx_source)}")
 
     display_df = df[columns].copy()
 
@@ -1260,9 +1281,22 @@ def render_asset_weight_section(user_id: str, account_id: str, start_date: str, 
     
     df = build_asset_weight_df(rows)
 
-    # 환율 적용
-    usd_krw, fx_source = get_usdkrw_rate()       # 세션 캐시, 1회 조회
-    df = apply_fx_to_df(df, usd_krw, amount_cols=["valuation_amount", "purchase_amount"])
+    # 과거 환율 조회 및 적용
+    from asset_portfolio.dashboard.data import get_historical_usdkrw_rate
+    from datetime import datetime
+    import pandas as pd
+    
+    t_start = pd.to_datetime(start_date).date() if start_date else pd.to_datetime("2020-01-01").date()
+    t_end = pd.to_datetime(end_date).date() if end_date else datetime.now().date()
+    fx_hist_df = get_historical_usdkrw_rate(t_start, t_end)
+    
+    df = FxService.apply_historical_fx_to_df(
+        df=df, 
+        fx_history_df=fx_hist_df, 
+        amount_cols=["valuation_amount", "purchase_amount"],
+        currency_col="currency",
+        date_col="date"
+    )
     
     # 총액이 0인 날짜는 제거(의미 없는 구간 제거)
     # df는 build_asset_weight_df 결과(valuation_amount_krw, total_amount_krw가 있음)
@@ -1774,7 +1808,7 @@ def render_realized_pnl_charts(user_id: str, account_id: str, start_date: str, e
     # 1) 전체 합계
     total_pnl = df["realized_pnl_krw"].sum()
     st.metric("기간 총 실현손익", f"{total_pnl:,.0f} 원")
-    st.caption(fx_caption(usd_krw, fx_source))
+    st.caption(FxService.fx_caption(usd_krw, fx_source))
     
     c1, c2 = st.columns(2)
     

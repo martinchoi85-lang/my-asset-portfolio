@@ -120,11 +120,13 @@ def render_asset_editor():
     # - yfinance: 기존 자동 가격 업데이트
     # - krx: KRX 자동 가격 업데이트(이번 추가 기능)
     current_price_source = str(row.get("price_source") or "manual").lower().strip()
+    # ✅ price_source 추가: manual (총액 입력형), manual_price (단가 입력형)
+    price_source_options = ["manual", "manual_price", "yfinance", "krx"]
     price_source = st.selectbox(
         "price_source",
-        ["manual", "yfinance", "krx"],
-        index=["manual", "yfinance", "krx"].index(current_price_source if current_price_source in {"manual", "yfinance", "krx"} else "manual"),
-        help="manual은 수동평가, yfinance는 자동, krx는 KRX 자동 가격입니다.",
+        price_source_options,
+        index=price_source_options.index(current_price_source if current_price_source in price_source_options else "manual"),
+        help="'manual'은 예적금/펀드 등 '총액' 기반, 'manual_price'는 비상장/현물 등 '단가' 기반, 'yfinance/krx'는 자동 가격입니다.",
     )
 
     # ✅ KRX 소스 설정 입력 UI
