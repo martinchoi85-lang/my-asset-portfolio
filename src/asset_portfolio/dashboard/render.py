@@ -1935,6 +1935,7 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
         "SELL": "매도",
         "DEPOSIT": "입금",
         "WITHDRAW": "출금",
+        "REVALUATION": "보정",
     }
     df_raw["transaction_date"] = pd.to_datetime(df_raw["transaction_date"]).dt.date
     df_raw["trade_type_kr"] = df_raw["trade_type"].map(trade_type_kr_map).fillna(df_raw["trade_type"])
@@ -1990,6 +1991,7 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
         "SELL": "매도",
         "DEPOSIT": "입금",
         "WITHDRAW": "출금",
+        "REVALUATION": "보정",
     }
 
     df["trade_type"] = df["trade_type"].map(TRADE_TYPE_KR).fillna(df["trade_type"])
@@ -2006,7 +2008,7 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
     df_display = df_display[cols]
 
     # === trade_type 기준 탭 필터링 ===
-    tabs = st.tabs(["전체", "매수", "매도", "입금", "출금"])
+    tabs = st.tabs(["전체", "매수", "매도", "입금", "출금", "보정"])
     
     with tabs[0]:
         st.dataframe(df_display, width="stretch")
@@ -2018,6 +2020,8 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
         st.dataframe(df_display[df_display["거래구분"] == "입금"], width="stretch")
     with tabs[4]:
         st.dataframe(df_display[df_display["거래구분"] == "출금"], width="stretch")
+    with tabs[5]:
+        st.dataframe(df_display[df_display["거래구분"] == "보정"], width="stretch")
 
     with st.expander("✏️ 거래 수정/삭제"):
         tx_rows = df_raw.sort_values("transaction_date", ascending=False).to_dict("records")
@@ -2041,7 +2045,7 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
         st.caption(f"계좌: {selected.get('account_label', '')}")
         st.caption(f"자산: {selected.get('asset_label', '')}")
 
-        trade_type_options = ["BUY", "SELL", "DEPOSIT", "WITHDRAW"]
+        trade_type_options = ["BUY", "SELL", "DEPOSIT", "WITHDRAW", "REVALUATION"]
         trade_type_labels = {
             "BUY": "매수",
             "SELL": "매도",
