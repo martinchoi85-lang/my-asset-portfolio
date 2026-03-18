@@ -15,6 +15,9 @@ from asset_portfolio.backend.services.transaction_service import (
     CreateTransactionRequest,
 )
 from asset_portfolio.dashboard.transaction_editor import _load_accounts_df, _load_assets_df
+from asset_portfolio.backend.services.importer.engine import TransactionParser
+from asset_portfolio.backend.services.importer.profiles import AVAILABLE_PROFILES
+from asset_portfolio.backend.services.asset_alias_service import AssetAliasService
 
 
 @dataclass
@@ -566,54 +569,31 @@ def _execute_upload(prepared_rows: List[PreparedTransaction], auto_cash: bool) -
 
 def render_transaction_importer(user_id: str) -> None:
     st.title("📥 거래내역 업로더(from HTS)")
-    st.caption("CSV/XLSX 업로드로 매매 내역 또는 배당금 내역을 일괄 등록합니다.")
+    st.caption("CSV/XLSX/클립보드로 매매 내역을 일괄 등록합니다.")
 
-    import_type = st.radio(
-        "업로드 유형 선택",
-        ["매매 내역", "배당금 내역"],
-        horizontal=True,
+    # [1단계] 증권사/HTS 양식 선택
+    st.markdown("### 1️⃣ 데이터 양식 선택 (필수)")
+    selected_idx = st.selectbox(
+        "사용할 증권사 HTS 화면(템플릿)을 정확히 선택해주세요",
+        range(len(AVAILABLE_PROFILES)),
+        format_func=lambda i: AVAILABLE_PROFILES[i].display_name
     )
+    profile = AVAILABLE_PROFILES[selected_idx]
 
-    with st.expander("📌 필수 필드 & 예시 보기", expanded=True):
-        if import_type == "매매 내역":
-            _render_required_fields_table([
-                {"필드": "계좌명", "예시": "키움증권_홍길동_위탁"},
-                {"필드": "거래일", "예시": "2024-12-31"},
-                {"필드": "티커", "예시": "AAPL / 005930"},
-                {"필드": "거래타입", "예시": "매수 / 매도 / BUY / SELL"},
-                {"필드": "수량", "예시": "10"},
-                {"필드": "단가", "예시": "150.5"},
-                {"필드": "(선택) 수수료", "예시": "1.25"},
-                {"필드": "(선택) 세금", "예시": "0.75"},
-                {"필드": "(선택) 메모", "예시": "해외주식 매수"},
-                {"필드": "(선택) 종목명", "예시": "Apple Inc"},
-                {"필드": "(선택) 통화", "예시": "USD / KRW"},
-                {"필드": "(선택) 시장", "예시": "korea / usa"},
-                {"필드": "(선택) 자산유형", "예시": "stock"},
-            ])
-        else:  # 배당 예시
-            _render_required_fields_table([
-                {"필드": "계좌명", "예시": "키움증권_홍길동_위탁"},
-                {"필드": "지급일자", "예시": "2024-12-31"},
-                {"필드": "티커", "예시": "AAPL / 005930"},
-                {"필드": "시장구분", "예시": "korea / usa"},
-                {"필드": "통화", "예시": "USD / KRW"},
-                {"필드": "배당금(세후)", "예시": "85.5"},
-                {"필드": "배당금(세전)", "예시": "100.0"},
-                {"필드": "(선택) 종목명", "예시": "Apple Inc"},
-            ])
+    with st.expander("📌 선택된 템플릿의 필수 컬럼 확인", expanded=False):
+        st.write(f"아래 컬럼명들이 업로드할 데이터에 포함되어 있어야 합니다.")
+        st.write(list(profile.column_map.keys()))
 
-    with st.expander("📌 등록된 계좌 확인", expanded=False):
+    with st.expander("📌 등록된 계좌 및 최근 거래일 힌트", expanded=False):
         _render_account_reference_table(user_id)
-
-    with st.expander("📌 계좌별 최근 거래일", expanded=False):
+        st.divider()
         latest_df = _get_latest_transaction_dates(user_id)
-        if latest_df.empty:
-            st.info("최근 거래일 정보를 불러올 수 없습니다.")
-        else:
+        if not latest_df.empty:
             st.dataframe(latest_df, width='stretch')
 
-    upload_method = st.radio("데이터 입력 방식", ["클립보드 붙여넣기", "구글 스프레드시트 링크 연동", "파일 업로드"], horizontal=True)
+    # [2단계] 데이터 입력
+    st.markdown("### 2️⃣ 데이터 붙여넣기 / 업로드")
+    upload_method = st.radio("데이터 입력 방식", ["클립보드 붙여넣기", "파일 업로드"], horizontal=True)
     
     raw_df = None
     if upload_method == "파일 업로드":
@@ -621,122 +601,110 @@ def render_transaction_importer(user_id: str) -> None:
         if uploaded_file:
             raw_df = _read_uploaded_file(uploaded_file)
     elif upload_method == "클립보드 붙여넣기":
-        st.info("💡 엑셀이나 구글 스프레드시트에서 데이터 전체(헤더 포함)를 드래그해서 복사(`Ctrl+C`)한 뒤 아래 칸에 붙여넣기(`Ctrl+V`) 하세요.")
-        pasted_data = st.text_area("데이터 붙여넣기", height=200, placeholder="여기에 데이터를 붙여넣으세요...")
+        pasted_data = st.text_area("엑셀/HTS 데이터 붙여넣기 (Ctrl+V)", height=150, placeholder="헤더 행부터 전체를 복사해서 붙여넣어주세요...")
         if pasted_data:
-            with st.spinner("데이터를 분석하는 중입니다..."):
+            with st.spinner("데이터 정리 중..."):
                 raw_df = _read_pasted_text(pasted_data)
-    else:
-        st.info("💡 스프레드시트의 공유 권한을 반드시 **'링크가 있는 모든 사용자'**가 볼 수 있도록 설정해야 합니다. (비공개 시 빈 화면이 로드됩니다.)")
-        sheet_url = st.text_input(
-            "구글 스프레드시트 링크",
-            help="브라우저 주소창의 링크를 그대로 복사해 붙여넣으세요. (가져올 시트를 띄워둔 상태에서 복사하면 해당 시트만 정확히 가져옵니다.)",
-            placeholder="예: https://docs.google.com/spreadsheets/d/.../edit?gid=12345#gid=12345"
-        )
+
+    if raw_df is None or raw_df.empty:
+        return
+
+    st.markdown("### ✅ 파싱 결과 미리보기")
+    
+    # [3단계] 파서 엔진 실행
+    with st.spinner("프로파일 규칙 단위로 파싱 중..."):
+        parser = TransactionParser(user_id, profile)
+        parsed_results = parser.parse(raw_df)
+    
+    # 결과 분류
+    ready_items = []
+    pending_items = []
+    
+    for item in parsed_results:
+        if item.status == "READY":
+            ready_items.append(item)
+        else:
+            pending_items.append(item)
+            
+    # 에러 및 추가 작업(Alias 등록) 표시
+    if pending_items:
+        st.error(f"⚠️ {len(pending_items)}건의 거래에 매칭되지 않은 [종목명/Ticker]가 존재합니다.")
+        st.warning("아래에서 수동으로 자산(Ticker) 대상을 매핑해주시면 Alias 사전에 등록되어 현재 작업 및 향후 자동 인식됩니다.")
         
-        if sheet_url:
-            try:
-                with st.spinner("데이터를 불러오는 중입니다..."):
-                    raw_df = _load_google_sheet(sheet_url)
-            except Exception as exc:
-                st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {exc}")
-
-    if raw_df is None:
+        assets_df = _load_assets_df()
+        asset_options = assets_df['ticker'] + " - " + assets_df['name'] if not assets_df.empty else pd.Series()
+        
+        need_alias_set = set(item.standard_data.get('asset_name', '') for item in pending_items)
+        alias_saved = False
+        
+        with st.form("alias_registry_form"):
+            new_aliases = {}
+            for missing_name in need_alias_set:
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    st.write(f"👉 **{missing_name}**")
+                with col2:
+                    matched_idx = st.selectbox(f"[{missing_name}] 과 매핑될 실제 자산", options=range(len(asset_options)), format_func=lambda i: asset_options.iloc[i], key=f"alias_{missing_name}")
+                    new_aliases[missing_name] = int(assets_df.iloc[matched_idx]['id'])
+                    
+            if st.form_submit_button("선택한 항목 Alias로 저장 (새로고침)"):
+                for m_name, a_id in new_aliases.items():
+                    AssetAliasService.add_alias(user_id, m_name, a_id)
+                st.success("Alias 사전 업데이트 완료! 데이터 파싱이 재시작됩니다.")
+                st.rerun()
+                
+        # 미매칭 항목이 있으면 업로드 중단
         return
 
-    if raw_df.empty:
-        st.error("불러온 데이터에 내용이 없습니다.")
+    # 모두 READY 인 경우
+    # 렌더링용 DF 생성
+    display_rows = []
+    for p in ready_items:
+        d = p.standard_data
+        display_rows.append({
+            "거래일자": d.get("transaction_date", ""),
+            "종목": d.get("asset_name") or d.get("ticker", ""),
+            "매매": d.get("trade_type", ""),
+            "수량": d.get("quantity", 0),
+            "단가": d.get("price", 0),
+            "수수료/세금": f"{d.get('fee',0)} / {d.get('tax',0)}",
+        })
+    st.dataframe(pd.DataFrame(display_rows), width='stretch')
+    
+    # (선택) 계좌 ID 매핑
+    st.markdown("### 4️⃣ 계좌 연결 및 전송")
+    accounts_df = _load_accounts_df(user_id)
+    if accounts_df.empty:
+        st.error("계좌가 없습니다.")
         return
+        
+    target_account_idx = st.selectbox(
+        "이 거래내역들을 어느 계좌로 밀어넣을까요?", 
+        options=range(len(accounts_df)), 
+        format_func=lambda i: accounts_df.iloc[i]['name']
+    )
+    selected_account_id = str(accounts_df.iloc[target_account_idx]['id'])
+    auto_cash = st.checkbox("BUY/SELL 시 CASH 자동 증감 반영", value=True)
 
-    if import_type == "매매 내역":
-        aliases = {
-            "account_name": ["계좌", "계좌명", "account", "account_name"],
-            "transaction_date": ["주문일자", "체결일", "거래일", "매매일자", "transaction_date"],
-            "ticker": ["티커", "종목코드", "ticker", "단축코드", "Ticker"],
-            "trade_type": ["거래타입", "매수/매도", "구분", "trade_type"],
-            "quantity": ["수량", "거래수량", "quantity", "결제수량"],
-            "price": ["단가", "체결가", "price"],
-            "fee": ["수수료", "fee", "매매수수료"],
-            "tax": ["세금", "tax"],
-            "memo": ["메모", "memo"],
-            "asset_name": ["종목명", "자산명", "상품명", "asset_name"],
-            "currency": ["통화", "currency"],
-            "market": ["시장", "시장구분", "market"],
-            "asset_type": ["자산유형", "asset_type"],
-        }
-    else:   # 배당 업로드
-        aliases = {
-            "account_name": ["계좌명", "account", "account_name"],
-            "transaction_date": ["지급일자", "거래일", "transaction_date"],
-            "ticker": ["티커", "종목코드", "ticker"],
-            "asset_name": ["종목명", "자산명", "asset_name"],
-            "market": ["시장구분", "시장", "market"],
-            "currency": ["통화", "currency"],
-            "dividend_net": ["배당금세후", "배당금(세후)", "dividend_net"],
-            "dividend_gross": ["배당금세전", "배당금(세전)", "dividend_gross"],
-        }
-
-    mapped_df, missing = _map_columns(raw_df, aliases)
-    required_fields = [
-        "account_name",
-        "transaction_date",
-        "ticker",
-    ]
-    if import_type == "매매 내역":
-        required_fields += ["trade_type", "quantity", "price"]
-    else:
-        required_fields += ["asset_name", "market", "currency", "dividend_net", "dividend_gross"]
-
-    missing_required = [field for field in required_fields if field in missing]
-    if missing_required:
-        st.error(f"필수 필드가 누락되었습니다: {', '.join(missing_required)}")
-        return
-
-    st.markdown("### ✅ 업로드 데이터 미리보기")
-    st.dataframe(mapped_df, width='stretch')
-
-    auto_cash = False
-    if import_type == "매매 내역":
-        auto_cash = st.checkbox("BUY/SELL 시 CASH 자동 반영", value=True)
-
-    if import_type == "매매 내역":
-        prepared, errors, duplicates = _prepare_trade_rows(mapped_df, user_id)
-    else:
-        prepared, errors, duplicates = _prepare_dividend_rows(mapped_df, user_id)
-
-    # ❌ 포맷/유효성 오류가 있으면 전체 업로드 차단
-    if errors:
-        st.error("업로드 오류가 발견되어 전체 업로드가 취소되었습니다.")
-        st.dataframe(pd.DataFrame({"오류 내용": errors}))
-        return
-
-    # ⚠️ DB 중복 거래는 경고로 표시하되 업로드는 계속 진행
-    if duplicates:
-        st.warning(
-            f"⚠️ {len(duplicates)}건의 중복 거래가 발견되었습니다. "
-            "해당 거래는 건너뛰고 나머지 거래는 정상 업로드됩니다."
-        )
-        st.dataframe(pd.DataFrame({"중복 거래 (스킵됨)": duplicates}))
-
-    if not prepared:
-        st.info("업로드할 신규 거래가 없습니다. (모든 거래가 중복이거나 오류입니다.)")
-        return
-
-    st.success(f"✅ {len(prepared)}건의 신규 거래가 검증되었습니다. 업로드를 진행할 수 있습니다.")
-
-    if st.button("업로드 실행"):
-        try:
-            inserted_count, created_assets = _execute_upload(prepared, auto_cash)
-        except Exception as exc:
-            st.error(f"업로드 중 오류가 발생했습니다: {exc}")
-            return
-
-        st.success(f"총 {inserted_count}건이 등록되었습니다.")
-        if created_assets:
-            unique_assets = sorted(set(created_assets))
-            st.warning(
-                "다음 자산을 신규 등록하고 거래내역을 입력했습니다. "
-                "가격 업데이트를 위해 price_source를 업데이트해 주세요: "
-                + ", ".join(unique_assets)
-            )
-        st.info("업로드 완료 후 거래 내역 및 스냅샷을 확인해 주세요.")
+    if st.button("🚀 최종 업로드 실행", type="primary"):
+        success_count = 0
+        with st.spinner("DB 저장 중..."):
+            for p in ready_items:
+                req = CreateTransactionRequest(
+                    account_id=selected_account_id,
+                    asset_id=p.asset_id,
+                    transaction_date=pd.to_datetime(p.standard_data.get("transaction_date")).date(),
+                    trade_type=p.standard_data.get("trade_type", "UNKNOWN"),
+                    quantity=float(p.standard_data.get("quantity", 0)),
+                    price=float(p.standard_data.get("price", 0)),
+                    fee=float(p.standard_data.get("fee", 0)),
+                    tax=float(p.standard_data.get("tax", 0)),
+                    memo=p.standard_data.get("memo", f"Import via {profile.name}"),
+                )
+                try:
+                    TransactionService.create_transaction_and_rebuild(req, auto_cash=auto_cash)
+                    success_count += 1
+                except Exception as e:
+                    st.toast(f"저장 실패: {e}")
+            
+        st.success(f"🎉 총 {success_count} 건 업로드 성공!")

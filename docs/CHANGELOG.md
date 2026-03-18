@@ -3,6 +3,9 @@
 ## [Current State] - 2026-03-18
 
 ### Added
+- `src/asset_portfolio/backend/services/importer`: **Phase 3 진행:** 클립보드(HTS) 업로더 구조 전면 개편. 증권사 화면별로 데이터 파싱 규칙을 정의하는 `ImportProfile` 프로파일 엔진 및 2-row 구조 병합 필터 도입.
+- `src/asset_portfolio/backend/services/asset_alias_service.py`: **Phase 3 진행:** 종목명 <-> 시스템 자산 DB 간의 안전한 사용자 정의 매핑을 지원하기 위해 `asset_aliases` DB 테이블 생성 및 연동.
+- `src/asset_portfolio/dashboard/transaction_importer.py`: **Phase 3 반영:** 명시적 프로파일(템플릿) 선택 기능 및 미인식 거래 맵핑 실패 시, 수동 대응 및 Alias 등록 UI 적용.
 - `docs/FUNCTION_LIST.md`: 코드 분석 효율성을 높이기 위한 전체 함수 및 클래스 맵 생성.
 - `src/asset_portfolio/dashboard/snapshot_editor.py`: **Phase 2 보완:** "정적 자산 평가액 갱신" 메뉴 고도화.
   - 전용 드롭다운 제거 및 전체 자산 자동 노출로 UI 단순화.

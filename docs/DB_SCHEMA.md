@@ -11,6 +11,17 @@ CREATE TABLE public.accounts (
   CONSTRAINT accounts_pkey PRIMARY KEY (id),
   CONSTRAINT fk_accounts_user_id FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
+CREATE TABLE public.asset_aliases (
+  id bigint NOT NULL DEFAULT nextval('asset_aliases_id_seq'::regclass),
+  user_id uuid NOT NULL,
+  alias_name text NOT NULL,
+  asset_id bigint NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT asset_aliases_pkey PRIMARY KEY (id),
+  CONSTRAINT fk_asset_aliases_user FOREIGN KEY (user_id) REFERENCES public.users(id),
+  CONSTRAINT fk_asset_aliases_asset FOREIGN KEY (asset_id) REFERENCES public.assets(id)
+);
 CREATE TABLE public.asset_price_sources (
   id bigint NOT NULL DEFAULT nextval('asset_price_sources_id_seq'::regclass),
   asset_id bigint NOT NULL,
@@ -159,6 +170,7 @@ CREATE TABLE public.transactions (
   fee numeric DEFAULT 0,
   tax numeric DEFAULT 0,
   memo text,
+  realized_pnl numeric DEFAULT 0,
   CONSTRAINT transactions_pkey PRIMARY KEY (id),
   CONSTRAINT fk_transaction_asset FOREIGN KEY (asset_id) REFERENCES public.assets(id),
   CONSTRAINT fk_transaction_account FOREIGN KEY (account_id) REFERENCES public.accounts(id)
