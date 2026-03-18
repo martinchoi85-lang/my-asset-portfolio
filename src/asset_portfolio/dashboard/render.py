@@ -1935,7 +1935,11 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
         "SELL": "매도",
         "DEPOSIT": "입금",
         "WITHDRAW": "출금",
+<<<<<<< HEAD
         "REVALUATION": "평가액조정",
+=======
+        "REVALUATION": "보정",
+>>>>>>> 25ea682a6e85b3e3686fd6a59edc1af479b04db9
     }
     df_raw["transaction_date"] = pd.to_datetime(df_raw["transaction_date"]).dt.date
     df_raw["trade_type_kr"] = df_raw["trade_type"].map(trade_type_kr_map).fillna(df_raw["trade_type"])
@@ -1991,7 +1995,11 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
         "SELL": "매도",
         "DEPOSIT": "입금",
         "WITHDRAW": "출금",
+<<<<<<< HEAD
         "REVALUATION": "평가액조정",
+=======
+        "REVALUATION": "보정",
+>>>>>>> 25ea682a6e85b3e3686fd6a59edc1af479b04db9
     }
 
     df["trade_type"] = df["trade_type"].map(TRADE_TYPE_KR).fillna(df["trade_type"])
@@ -2008,7 +2016,11 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
     df_display = df_display[cols]
 
     # === trade_type 기준 탭 필터링 ===
+<<<<<<< HEAD
     tabs = st.tabs(["전체", "매수", "매도", "입금", "출금", "평가액조정"])
+=======
+    tabs = st.tabs(["전체", "매수", "매도", "입금", "출금", "보정"])
+>>>>>>> 25ea682a6e85b3e3686fd6a59edc1af479b04db9
     
     with tabs[0]:
         st.dataframe(df_display, width="stretch")
@@ -2021,7 +2033,11 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
     with tabs[4]:
         st.dataframe(df_display[df_display["거래구분"] == "출금"], width="stretch")
     with tabs[5]:
+<<<<<<< HEAD
         st.dataframe(df_display[df_display["거래구분"] == "평가액조정"], width="stretch")
+=======
+        st.dataframe(df_display[df_display["거래구분"] == "보정"], width="stretch")
+>>>>>>> 25ea682a6e85b3e3686fd6a59edc1af479b04db9
 
     with st.expander("✏️ 거래 수정/삭제"):
         tx_rows = df_raw.sort_values("transaction_date", ascending=False).to_dict("records")
