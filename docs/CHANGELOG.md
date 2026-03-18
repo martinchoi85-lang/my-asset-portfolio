@@ -1,5 +1,19 @@
 # Changelog
 
+## [Current State] - 2026-03-18
+
+### Added
+- `docs/FUNCTION_LIST.md`: 코드 분석 효율성을 높이기 위한 전체 함수 및 클래스 맵 생성.
+- `docs/REFACTORING_PLAN.md`: Auto/Manual 자산 논리적 분리 및 차세대 기능(안드로이드, AI 연동 등)을 고려한 마스터 리팩토링 계획 수립.
+- `src/asset_portfolio/backend/services/asset_handler.py`: **Phase 1 진행:** 자산 유형(Auto/Manual)별 추상화 계층(`AssetManager`, `AssetHandler`, `AutoAssetHandler`, `ManualAssetHandler`)을 도입. 수동 기입 자산(Manual)의 수익률 계산을 위한 비례 차감 공식(`calculate_withdrawal_cost_delta`)을 백엔드에 내재화.
+
+### Changed
+- `src/asset_portfolio/dashboard/render.py`: '평가액조정'을 '보정'으로 통합하는 머지 컨플릭트 해결 및 UI 일관성 확보.
+- `src/asset_portfolio/backend/services/transaction_service.py` 및 `portfolio_calculator.py`: **Phase 1 반영:** 하드코딩된 `_is_manual_asset` 분기문을 제거하고 `AssetManager`를 통해 객체지향적 위임(다형성) 구조로 전면 리팩토링.
+
+
+---
+
 ## [Unreleased] - 2026-03-11
 
 ### Added

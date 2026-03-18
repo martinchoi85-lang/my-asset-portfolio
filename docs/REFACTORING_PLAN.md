@@ -1,43 +1,65 @@
-# 🛠️ 향후 리팩토링 계획 (Refactoring Plan)
+# 🛠️ 향후 리팩토링 및 아키텍처 개선 계획 (Refactoring Plan)
 
-이 문서는 프로젝트가 더 커지기 전에 **안정성(Stability), 수월한 유지보수성(Maintainability), 그리고 확장 가능성(Scalability)**을 확보하기 위해 수행해야 할 리팩토링 목표와 단계별 계획을 정의합니다. 현재 발견된 병목 지점, 데드 코드, 그리고 잠재적 로직 버그를 기반으로 작성되었습니다.
-
----
-
-## 🛑 현재 아키텍처의 주요 문제점 (Pain Points)
-
-1. **Snapshot 계산 로직의 비효율성 및 평가금 왜곡 가능성**
-   - 매번 자산의 Snapshots을 리빌드할 때마다 '과거 모든 트랜잭션'을 불러와 처음부터 잔고를 계산합니다. (O(N) 성능 저하 요인)
-   - 과거 날짜의 매일매일 평가금(valuation_amount)을 계산할 때, 해당 일자의 가격 히스토리가 DB에 없으면 **`assets.current_price` (최신 가격)를 사용**하여 과거의 평가금액을 왜곡시킵니다.
-   
-2. **Multi-Currency(다중 통화) 책임 분산**
-   - 현재 백엔드의 `portfolio_calculator`는 개별 통화 기반으로 계산하고, 환율 변환(USD -> KRW)은 대시보드(`fx_utils.py` 및 `render.py`) 계층에서 처리되고 있습니다. 이는 향후 포트폴리오全体の TWR(Time-Weighted Return) 등 정교한 백테스팅 및 수익률 복합 계산을 어렵게 만듭니다.
-
-3. **파편화된 유틸리티와 남겨진 데드 코드**
-   - `portfolio_calculator.py`에 더 이상 쓰이지 않는 주석 블록, `daily_snapshot_generator.py`의 중복 임포트, 그리고 대시보드 쪽에 남겨진 데이터 조작 패키지(`data.py`) 등 정리가 필요한 코드가 혼재합니다.
+이 문서는 **"자동 업데이트 자산(Auto Assets)"과 "수동 기입 자산(Manual Assets)"의 논리적/UI 완벽 분리**를 최우선 목표로 하며, 현재의 UX 페인 포인트 해소 및 향후 로드맵(안드로이드, AI 연동 등)을 지원하기 위한 마스터플랜입니다.
 
 ---
 
-## 📍 리팩토링 마일스톤 (Milestones)
+## 🎯 리팩토링 철학 및 방향성
 
-### Phase 1: 로직 결함 수정 및 데드 코드 대청소 (Clean-up & High Priority Fixes)
-- **Dead Code 삭제**: `NOTES.md`에 기록된 주석 처리된 레거시 함수 및 중복된 Import 구문을 모두 삭제.
-- **파일 재배치(Re-structure)**: `dashboard` 디렉터리 하단에 있는 `fx_utils.py`와 `data.py` 내부 로직 중 백엔드 코어에 속해야 할 로직을 `backend/services`나 `backend/utils` 하위로 이동.
-- **Snapshot 가격 Fallback 로직 수정**: `portfolio_calculator.calculate_daily_snapshots_for_asset` 내부의 Fallback을 `current_price`에서 `purchase_price`(매입원가)로 변경하여 과거 데이터가 미래 가격으로 부풀려지는 것을 차단.
+> **"DB 원원장(Single Source)은 유지하되, 애플리케이션/UI 계층에서는 완벽히 다른 두 세계로 관리한다."**
 
-### Phase 2: Snapshot 성능 최적화 (Performance Optimization)
-- **점진적 스냅샷 빌드 (Incremental Build) 도입**:
-  - 기존처럼 시작일부터 전체 역사를 다시 순회(O(N))하는 대신, 시작일 바로 전날(start_date - 1일)의 Snapshot 데이터를 조회.
-  - 해당 데이터를 기반(Base State)으로 삼아 이후의 트랜잭션만 연산하도록 `calculate_daily_snapshots_for_asset` 재설계.
-
-### Phase 3: Multi-Currency 아키텍처 서버 사이드 이관 (Domain Consistency)
-- **환율 적용 계층 변경**: 대시보드의 `render.py`에서 FX 변환을 없애고, 백엔드의 `portfolio_service.py`나 `daily_snapshot_generator.py` 호출 결과물 자체에 Base Currency (예: KRW) 기준의 `valuation_amount_krw` 등을 포함하여 제공토록 설계.
-- **FxService 고도화**: 트랜잭션 저장 시 해당 일자의 환율(FX Rate)을 함께 보관하는 필드 추가 (추가적인 DB Schema 변경 필요). 이를 바탕으로 진정한 '환차익'과 '자본수익'을 분별하는 기초 뼈대 마련.
-
-### Phase 4: 테스트 코드 작성 및 검증 자동화 (Test Automation)
-- 핵심이 되는 순수 함수 모듈(`portfolio_calculator.py` 등)부터 `pytest`를 활용한 Unit Test 구축.
-- BUY/SELL 거래 누적에 따른 평균단가, 실현손익, 스냅샷 평가금액 검증 시나리오 작성.
+- **무결성 유지:** 통합된 `transactions` 및 `daily_snapshots` 테이블을 유지하여 포트폴리오 전체의 누적 수익률(TWR)과 현금흐름 집계의 무결성을 지킵니다.
+- **UX 극대화:** DB 스키마의 한계(`quantity=1` 등)를 프론트엔드 단에 절대 노출하지 않고, 사용자 친화적으로 한 번 더 가공(View Layer)하여 보여줍니다.
+- **분기를 추상화로 전환:** 코드 곳곳에 하드코딩된 `if asset_type == 'MANUAL'`을 걷어내고, 객체 지향적(다형성) 접근 방식으로 로직을 리팩토링합니다.
 
 ---
 
-> **비고**: 본 리팩토링은 한 번에 큰 규모로 진행하기보다, 기능 개발과 병행하여 **안전한 Phase 단위로 (특히 Phase 1 -> Phase 2 순서)** 진행하는 것을 권장합니다. 본 문서에 작성된 계획에 따라 향후 작업을 실행할 수 있습니다.
+## 📍 단계별 실행 계획 (Milestones)
+
+### Phase 1: 백엔드 도메인 분리 및 정렬 (Backend Refactoring) [✅ 완료]
+**해결됨:** 수많은 서비스 모듈에서 Auto/Manual을 분기문으로 처리하던 로직의 결합도를 낮추고 캡슐화 완료.
+- **도메인 캡슐화 로직 도입:**
+  - 기존 로직을 파싱하여 `AssetManager` 인터페이스를 만들고 그 하위에 `AutoAssetHandler`, `ManualAssetHandler`를 두어 자산 유형에 따른 거래 검증/스냅샷 반영/원금 계산 로직을 캡슐화합니다.
+- **Manual 자산의 수익률 계산 공식 확정:**
+  - 예적금 만기 및 부분 매도시의 평가금/원금 비율을 어떻게 차감하고 '수익률'로 정의할지에 대한 표준 공식을 백엔드에 내재화합니다.
+
+### Phase 2: 대시보드 뷰어 및 사용자 맞춤 UI 개편 (UI/UX Revamp)
+**현재 병목:** '시스템 관리' 메뉴에 수동 자산 관리가 숨어 있고 예적금 만기 처리가 직관적이지 않으며, DB의 형태가 화면에 그대로 노출됨.
+- **메뉴 아키텍처 완전 분리 (Two-Track UI):**
+  - `[ 📈 시장 연동 자산 (주식/ETF/크립토) ]`
+  - `[ 🏦 정적 자산 (예금/부동산/TDF) ]`
+  - 위와 같이 Left Navigation을 직관적으로 개편하여 동선 자체를 나눕니다.
+- **맞춤형 Action 폼 제공:**
+  - 예적금 해지/만기 버튼을 클릭하면 귀찮은 거래 입력 폼 대신, **[원금 전액 출금], [이자 수령액 입력], [연결 계좌로 이체]** 등 비즈니스 시나리오 중심의 간편 폼을 띄워 백엔드 트랜잭션을 일괄 생성하도록 지원합니다.
+- **데이터 프레젠테이션 계층(View) 추가 가공:**
+  - 대시보드의 메인 테이블과 차트에서는 DB의 Raw Data(예: Manual 자산의 quantity=1)를 렌더링 직전에 '평가총액' 등 사람이 이해하는 방식으로 필터링하여 사용자 혼란을 차단합니다.
+
+### Phase 3: Transaction Importer 자동화 및 유연화
+**현재 병목:** HTS 데이터를 가져오면 Ticker나 Account 전처리 등을 수작업해야 하며, Auto/Manual이 동시에 처리되지 않음.
+- **Smart 파서 및 휴리스틱 매핑 결합:**
+  - HTS 데이터를 그대로 붙여넣어도, 계좌명(Account Name)을 누락된 경우 기본 디폴트 계좌로 타겟팅하거나, Ticker 번호가 없는 종목명이나 정적 자산이 들어오면 기존 Assets 테이블 이름과 Fuzzy string 매칭을 통해 매핑합니다.
+- **통합 업로드 처리:**
+  - Excel/CSV 한 장 안에 주식 매수와 예금 입금이 섞여 있어도 내부의 분기 처리 엔진이 알아서 Auto/Manual 리스트로 분류하여 각각의 검증 파이프라인(Phase 1 도입 로직)을 태운 뒤 한 번에 커밋(Commit)합니다.
+
+### Phase 4: 시스템 기반 안정화 (Performance & Session)
+**현재 병목:** 다수 거래 입력시 딜레이 극심, F5(새로고침) 시 세션 초기화.
+- **상태 관리 및 세션(Session) 유지 확보:**
+  - Streamlit 환경의 한계를 줄이고, 모바일(React) 이관을 준비하기 위해 토큰(혹은 로컬/쿠키 스토리지) 기반 사용자 세션 유지 로직 도입.
+- **일괄 처리(Batching) 기능 도입:**
+  - 트랜잭션 저장 시 매건 마다 DB와 핑퐁하지 않고, 클라이언트 상태에 임시 담아두었다가 **[최종 저장(Commit)]** 버튼 클릭 시 대량 Bulk Insert 처리를 수행하는 방식으로 딜레이를 해소합니다.
+
+### Phase 5: 미래 확장 파이프라인 구축 (Future Growth & AI)
+이 단계는 본 시스템이 "개인을 위한 고도화된 자산 관리 AI 플랫폼"으로 넘어가기 위한 토대입니다. 향후 신규 기능을 개발할 때 본 구조 위에 얹힐 예정입니다.
+
+1. **조회/단순입력용 안드로이드 App (React 연동):**
+   - 백엔드를 FastAPI/플라스크 형태의 순수 API 서버로 완전히 탈피시켜, 모바일 프론트엔드가 DB 모델을 몰라도 "내 총자산(DTO)"만 받아갈 수 있게 합니다.
+2. **복합 자산(TDF, 펀드)의 Look-through 분석 기초:**
+   - 펀드 자산 하위에 묶인 '주식 비중', '채권 비중'을 분해해서 볼 수 있도록 모델 구조 룸(Room)을 비워둡니다. (예: `asset_segments` 테이블 확장)
+3. **매크로/거시 지표(국채 금리 등) 표출:**
+   - 내 자산 차트와 비교할 비교 대상 지표 데이터 피드 파이프라인 추가 공간 마련.
+4. **MCP (Model Context Protocol) 기반 AI 연동 준비:**
+   - 사용자의 포트폴리오를 AI 분석 에이전트가 던져줄 수 있도록, 현재 상태 요약 리포트(JSON/Markdown)를 동적으로 추출해주는 엔드포인트를 설계 및 제공합니다.
+
+---
+
+> **결론:** 무리한 데이터베이스 분할로 인한 리스크를 피하고, **애플리케이션(파이썬) 코드에서의 강건한 설계 방식(다형성/객체지향)**과 **UX의 고도화**를 통해 사용자 페인 포인트를 부드럽게 해결해 나갈 것입니다. 위 순서대로 하나씩 격파하겠습니다.

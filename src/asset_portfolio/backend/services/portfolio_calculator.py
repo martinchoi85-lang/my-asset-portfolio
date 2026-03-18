@@ -397,8 +397,13 @@ def apply_transactions(transactions):
 
 
 def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_date: date, end_date: date):
+    from asset_portfolio.backend.services.asset_handler import AssetManager
+    handler = AssetManager.get_handler(asset_id)
+    return handler.calculate_snapshots(account_id, start_date, end_date)
+
+def _calculate_auto_snapshots_for_asset(asset_id: int, account_id: str, start_date: date, end_date: date):
     """
-    특정 자산에 대해 일별 snapshot 데이터를 계산한다.
+    특정 자동(Auto) 자산에 대해 일별 snapshot 데이터를 계산한다.
     (DB 저장 X, 계산 결과만 반환)
 
     ✅ 반영 정책

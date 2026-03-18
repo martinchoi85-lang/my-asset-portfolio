@@ -10,7 +10,6 @@ from asset_portfolio.backend.services.portfolio_calculator import calculate_dail
 
 # V1 trade types
 TRADE_TYPES = {"BUY", "SELL", "INIT", "DEPOSIT", "WITHDRAW"}
-MANUAL_PRICE_SOURCES = {"manual"}  # 필요시 {"manual","snapshot"} 등 확장
 
 # 자산명/티커로 판별하지 않고, asset_type='cash' 등을 쓰면 가장 좋지만
 # 현재 스키마에서 확실히 보장되지 않으므로, V1에서는 ticker/name_kr로도 보조 확인 가능
@@ -59,27 +58,6 @@ class TransactionService:
     def _chunk(rows: List[Dict[str, Any]], size: int = 500):
         for i in range(0, len(rows), size):
             yield rows[i:i + size]
-
-    @staticmethod
-    def _is_manual_asset(asset_id: int) -> bool:
-        """
-        ✅ 수동평가 자산 여부 판단
-        - price_source == 'manual' 이면, daily_snapshots는 Snapshot Editor가 관리하는 것으로 간주
-        - 이 자산들은 'delete 후 재생성' 리빌드를 금지한다 (수동 입력값이 날아감)
-        """
-        supabase = get_supabase_client()
-        row = (
-            supabase.table("assets")
-            .select("price_source, asset_type")
-            .eq("id", asset_id)
-            .single()
-            .execute()
-            .data
-        ) or {}
-
-        price_source = (row.get("price_source") or "").lower().strip()
-        # asset_type으로도 보조 판정하고 싶으면 여기에 추가 가능
-        return price_source in MANUAL_PRICE_SOURCES
     
     @staticmethod
     def _get_asset_cash_flag(asset_id: int) -> bool:
@@ -232,65 +210,15 @@ class TransactionService:
         # =========================
         TransactionService.rebuild_realized_pnl_for_asset(account_id, asset_id)
 
-        # =========================
-        # 0) manual 자산은 리빌드 제외
-        # =========================
-        if TransactionService._is_manual_asset(asset_id):
-            # 사용자가 원할 경우: "manual도 리빌드" 옵션을 별도로 만들 수 있으나
-            # 기본값은 반드시 제외가 안전합니다.
-            return 0
-
-        supabase = get_supabase_client()
-
-        # 1) 계산
-        snapshots = calculate_daily_snapshots_for_asset(
-            asset_id=asset_id,
-            account_id=account_id,
-            start_date=start_date,
-            end_date=end_date,
+        from asset_portfolio.backend.services.asset_handler import AssetManager
+        handler = AssetManager.get_handler(asset_id)
+        
+        return handler.rebuild_snapshots(
+            account_id=account_id, 
+            start_date=start_date, 
+            end_date=end_date, 
+            delete_first=delete_first
         )
-
-        # 거래가 없으면 기간 삭제(기존 정책)
-        if not snapshots:
-            if delete_first:
-                (
-                    supabase.table("daily_snapshots")
-                    .delete()
-                    .eq("account_id", account_id)
-                    .eq("asset_id", asset_id)
-                    .gte("date", start_date.isoformat())
-                    .lte("date", end_date.isoformat())
-                    .execute()
-                )
-            return 0
-
-        # 2) date 직렬화
-        for r in snapshots:
-            if isinstance(r.get("date"), date):
-                r["date"] = r["date"].isoformat()
-
-        # 3) delete-range
-        if delete_first:
-            (
-                supabase.table("daily_snapshots")
-                .delete()
-                .eq("account_id", account_id)
-                .eq("asset_id", asset_id)
-                .gte("date", start_date.isoformat())
-                .lte("date", end_date.isoformat())
-                .execute()
-            )
-
-        # 4) upsert
-        inserted = 0
-        for chunk in TransactionService._chunk(snapshots, size=500):
-            supabase.table("daily_snapshots").upsert(
-                chunk,
-                on_conflict="date,asset_id,account_id",
-            ).execute()
-            inserted += len(chunk)
-
-        return inserted
 
 
     @staticmethod
