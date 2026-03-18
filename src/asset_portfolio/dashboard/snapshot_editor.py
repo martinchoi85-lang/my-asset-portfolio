@@ -235,6 +235,7 @@ def render_snapshot_editor(user_id: str):
             with st.spinner("스냅샷 저장 중..."):
                 save_rows = []
                 cost_basis_events = []
+                new_transactions = []
 
                 # edited는 account_id/asset_id가 없으므로 base_df의 동일 index를 이용해 매핑
                 for i, row in edited.iterrows():
@@ -244,17 +245,38 @@ def render_snapshot_editor(user_id: str):
                     amt = float(row["평가금액"] or 0.0)
                     delta = float(row["원금 증감"] or 0.0)
 
+                    # ✅ 기존 스냅샷(평가금액)과 비교해 차이를 리밸류에이션 거래로 기록
+                    original_amt = float(base_df.iloc[i].get("valuation_amount", 0.0))
+                    revaluation_qty = amt - original_amt
+                    
+                    # ✅ 원금은 그대로 유지 (사용자가 수정하지 않음, cost basis는 별도)
+                    original_purchase_amount = float(base_df.iloc[i].get("purchase_amount", 0.0))
+                    purchase_price = original_purchase_amount / amt if amt > 0 else 0.0
+
                     save_rows.append({
                         "date": snap_date.isoformat(),
                         "account_id": account_id,
                         "asset_id": asset_id,
                         "quantity": amt,
                         "valuation_price": 1.0,
-                        "purchase_price": 1.0,
+                        "purchase_price": purchase_price,
                         "valuation_amount": amt,
-                        "purchase_amount": amt,
+                        "purchase_amount": original_purchase_amount,
                         "currency": ccy,
                     })
+                    
+                    if abs(revaluation_qty) > 0.001:
+                        new_transactions.append({
+                            "account_id": account_id,
+                            "asset_id": asset_id,
+                            "trade_type": "REVALUATION",
+                            "quantity": revaluation_qty,
+                            "price": 1.0,
+                            "transaction_date": snap_date.isoformat(),
+                            "fee": 0.0,
+                            "tax": 0.0,
+                            "memo": "Manual Snapshot Update",
+                        })
 
                     if delta != 0:
                         # 수동 자산의 추가 납입/인출은 cost basis 이벤트로 기록한다.
@@ -267,6 +289,10 @@ def render_snapshot_editor(user_id: str):
                             "reason": "snapshot_editor",
                             "memo": None,
                         })
+
+                if new_transactions:
+                    supabase = get_supabase_client()
+                    supabase.table("transactions").insert(new_transactions).execute()
 
                 _upsert_snapshots(save_rows)
                 # 수동자산은 평가 입력 시점에만 가격 히스토리를 저장한다.

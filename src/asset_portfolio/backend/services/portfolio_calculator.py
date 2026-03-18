@@ -190,6 +190,18 @@ def calculate_portfolio_state_at_date(account_id: str, target_date: date):
             asset["purchase_price"] = price
 
         # -------------------------
+        # 평가액 조정 (REVALUATION)
+        # -------------------------
+        elif trade_type == "REVALUATION":
+            asset["quantity"] += qty
+            if asset["quantity"] > 0:
+                asset["purchase_price"] = asset["purchase_amount"] / asset["quantity"]
+            else:
+                asset["quantity"] = 0
+                asset["purchase_amount"] = 0
+                asset["purchase_price"] = 0
+
+        # -------------------------
         # 현금 입금 (예수금)
         # -------------------------
         elif trade_type == "DEPOSIT":
@@ -347,6 +359,12 @@ def apply_transactions(transactions):
         if tx["type"] == "BUY":
             total_cost += (qty * price) + fee + tax
             total_quantity += qty
+            
+        # =========================
+        # 평가액 조정 처리
+        # =========================
+        elif tx["type"] == "REVALUATION":
+            total_quantity += qty
 
         # =========================
         # 매도 처리 (부분 매도 포함)
@@ -460,6 +478,11 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
             if trade_type in ("BUY", "INIT"):
                 current_qty += qty
                 total_purchase_amount += qty * price
+            elif trade_type == "REVALUATION":
+                current_qty += qty
+                if current_qty <= 0:
+                    current_qty = 0.0
+                    total_purchase_amount = 0.0
             elif trade_type == "SELL":
                 avg_price = (total_purchase_amount / current_qty) if current_qty > 0 else 0.0
                 total_purchase_amount -= avg_price * qty
@@ -513,6 +536,13 @@ def calculate_daily_snapshots_for_asset(asset_id: int, account_id: str, start_da
             if trade_type in ("BUY", "INIT"):
                 current_qty += qty
                 total_purchase_amount += qty * price
+                
+            # ✅ REVALUATION: 평가액(수량)만 변동, 원금은 유지
+            elif trade_type == "REVALUATION":
+                current_qty += qty
+                if current_qty <= 0:
+                    current_qty = 0.0
+                    total_purchase_amount = 0.0
 
             # ✅ SELL: 평균단가 기준 원가 차감, 수량 감소
             elif trade_type == "SELL":
