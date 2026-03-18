@@ -947,19 +947,32 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
         st.info("최신 스냅샷 데이터를 불러오지 못했습니다.")
         return
 
+    # ✅ 필터링 옵션 추가
+    view_mode = st.radio(
+        "보기 설정",
+        ["전체", "📈 시장 연동", "🏦 정적 자산"],
+        horizontal=True,
+        index=0,
+        label_visibility="collapsed"
+    )
+
     df = pd.json_normalize(rows, sep=".")
+
+    # ✅ 필터링 적용
+    if view_mode == "📈 시장 연동":
+        df = df[df["assets.price_source"].fillna("").str.lower().str.strip() != "manual"]
+    elif view_mode == "🏦 정적 자산":
+        df = df[df["assets.price_source"].fillna("").str.lower().str.strip() == "manual"]
 
     df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce")
     df = df[df["quantity"].fillna(0) != 0]
     if df.empty:
-        st.info("최신 스냅샷에 수량이 0인 자산만 있습니다.")
+        st.info("표시할 자산 데이터가 없습니다.")
         return
 
     df = attach_manual_cost_basis(df, user_id=user_id)
 
     # ✅ USD 자산의 평가금액 / 원금을 KRW로 환산
-    #    - 단가(valuation_price, purchase_price)는 원통화 유지 (표에서 '통화' 콜럼으로 달러임을 명시)
-    #    - 수익금액 / 수익률은 환산된 금액 기준으로 자동 재계산됨
     usd_krw, fx_source = get_usdkrw_rate()
     df = FxService.apply_fx_to_df(
         df, usd_krw,
@@ -1008,7 +1021,7 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
         columns={
             "accounts.name": "계좌명",
             "assets.name_kr": "자산명",
-            "quantity": "수량/수동자산 총액",
+            "quantity": "수량",
             "purchase_price": "매수단가",
             "valuation_price": "현재단가",
             "manual_principal": "원금(수동자산)",
@@ -1020,10 +1033,21 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
         }
     )
 
+    # ✅ Fix ArrowTypeError & FutureWarning: 
+    # 수동 자산(MANUAL)의 경우 수량과 단가를 화면에 노출하지 않음 (대신 '-' 표시)
+    # 반드시 astype(object)로 변환 후 대입해야 pd.Series(float)에 string을 넣을 때 발생하는 에러 방지 가능
+    # 또한, Arrow 직렬화 시 mixed type(float + str) 에러를 방지하기 위해 전체를 문자열로 통일합니다.
+    if manual_mask.any():
+        for col in ["수량", "매수단가", "현재단가"]:
+            df[col] = df[col].astype(object)
+            df.loc[manual_mask, col] = "-"
+            # Arrow 호환성을 위해 숫자를 포함한 전체를 문자열로 변환 (None은 유지)
+            df[col] = df[col].apply(lambda x: "-" if x == "-" else (None if pd.isna(x) else str(x)))
+
     columns = [
         "계좌명",
         "자산명",
-        "수량/수동자산 총액",
+        "수량",
         "매수단가",
         "현재단가",
         "원금(수동자산)",
@@ -1044,6 +1068,8 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
     def _format_quantity(value):
         if pd.isna(value):
             return ""
+        if value == "-":
+            return "-"
         try:
             num = float(value)
         except (TypeError, ValueError):
@@ -1052,17 +1078,26 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
             return f"{num:,.0f}"
         return f"{num:,.2f}"
 
+    def _format_price(value):
+        if value == "-":
+            return "-"
+        try:
+            num = float(value)
+            return f"{num:,.2f}"
+        except (TypeError, ValueError):
+            return value
+
     format_map = {
         columns[2]: _format_quantity,
-        columns[3]: "{:,.2f}",
-        columns[4]: "{:,.2f}",
+        columns[3]: _format_price,
+        columns[4]: _format_price,
         columns[5]: "{:,.0f}",
         columns[6]: "{:,.0f}",
         columns[7]: "{:,.0f}",
         profit_rate_col: "{:.2f}%",
     }
 
-    for col in format_map:
+    for col in [columns[5], columns[6], columns[7], profit_rate_col]:
         display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
 
     profit_amount_idx = display_df.columns.get_loc(profit_amount_col)

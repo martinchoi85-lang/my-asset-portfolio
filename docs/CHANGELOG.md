@@ -4,12 +4,19 @@
 
 ### Added
 - `docs/FUNCTION_LIST.md`: 코드 분석 효율성을 높이기 위한 전체 함수 및 클래스 맵 생성.
-- `docs/REFACTORING_PLAN.md`: Auto/Manual 자산 논리적 분리 및 차세대 기능(안드로이드, AI 연동 등)을 고려한 마스터 리팩토링 계획 수립.
+- `src/asset_portfolio/dashboard/snapshot_editor.py`: **Phase 2 보완:** "정적 자산 평가액 갱신" 메뉴 고도화.
+  - 전용 드롭다운 제거 및 전체 자산 자동 노출로 UI 단순화.
+  - **'납입원금' 직접 수정 기능** 추가 및 현재 저장된 원금값이 테이블에 즉시 표시되도록 개선.
+  - 수정 시 `cost_basis_events`를 통해 **원금 정보를 영구 저장**하여 리빌드 시에도 유지되도록 로직 강화.
+- `src/asset_portfolio/dashboard/static_asset_action.py`: **Phase 2 진행:** 정적 자산(수동 자산) 전용 액션 폼(원금 출금, 이자 입력, 현금 미러링 지원) 및 보유내역 테이블 뷰 추가.
 - `src/asset_portfolio/backend/services/asset_handler.py`: **Phase 1 진행:** 자산 유형(Auto/Manual)별 추상화 계층(`AssetManager`, `AssetHandler`, `AutoAssetHandler`, `ManualAssetHandler`)을 도입. 수동 기입 자산(Manual)의 수익률 계산을 위한 비례 차감 공식(`calculate_withdrawal_cost_delta`)을 백엔드에 내재화.
 
 ### Changed
-- `src/asset_portfolio/dashboard/render.py`: '평가액조정'을 '보정'으로 통합하는 머지 컨플릭트 해결 및 UI 일관성 확보.
-- `src/asset_portfolio/backend/services/transaction_service.py` 및 `portfolio_calculator.py`: **Phase 1 반영:** 하드코딩된 `_is_manual_asset` 분기문을 제거하고 `AssetManager`를 통해 객체지향적 위임(다형성) 구조로 전면 리팩토링.
+- `src/asset_portfolio/dashboard/render.py`: **Phase 2 보완:** 메인 대시보드 스냅샷 테이블에 **[전체, 📈 시장 연동, 🏦 정적 자산] 필터링 탭**을 추가하여 통합 보유내역 조회가 가능하도록 개편.
+- `src/asset_portfolio/dashboard/render.py`: **Bug Fix:** 수동 자산 표시를 위해 `object` 타입으로 명시적 형변환을 수행하여 pandas/pyarrow의 특정 버전에서 발생하는 `ArrowTypeError` 해결.
+- `src/asset_portfolio/dashboard/app.py`: **Phase 2 반영:** 통합 대시보드 개편에 따라 중복된 "정적 자산 보유내역" 메뉴 및 라우팅 제거.
+- `src/asset_portfolio/dashboard/static_asset_action.py`: **Bug Fix:** 잘못된 모듈 경로(`asset_portfolio.dashboard.query`)로 인한 `ImportError`를 올바른 경로(`asset_portfolio.backend.infra.query`)로 수정하여 "만기/해지/출금 관리" 메뉴 정상화.
+- `src/asset_portfolio/dashboard/static_asset_action.py`: **Cleanup:** 사용되지 않는 `render_static_asset_holdings` 함수 제거 및 코드 정리.
 
 
 ---

@@ -101,12 +101,12 @@ def render_main_dashboard():
             del st.session_state.user
             st.rerun()
 
-        # 기능 그룹화
+        # 메뉴 아키텍처 개편 (Two-Track UI) - 도메인 그룹화 (3뎁스 지양)
         menu_items = {
-            "🏠 포트폴리오": ["요약 (Overview)", "성과 (Performance)", "이력 (History)"],
-            "✍️ 거래 관리": ["거래내역 입력", "정기매수 관리", "거래내역 업로드"],
-            "💼 자산 관리": ["자산 정보 수정", "자산가격 업데이트"],
-            "🛠️ 시스템 관리": ["스냅샷 수정"],
+            "📊 통합 대시보드": ["요약 (Overview)", "성과 (Performance)", "이력 (History)"],
+            "📈 시장 연동 자산": ["거래내역 입력", "자산가격 업데이트", "정기매수 관리", "거래내역 업로드"],
+            "🏦 정적 자산 (수동)": ["정적 자산 평가액 갱신", "만기/해지/출금 관리"],
+            "🛠️ 시스템 관리": ["자산 정보 수정"],
         }
         
         # 1. 메인 카테고리 선택
@@ -135,11 +135,15 @@ def render_main_dashboard():
     if page == "자산 정보 수정":
         render_asset_editor()
         st.stop()
-    if page == "스냅샷 수정":
+    if page == "정적 자산 평가액 갱신":
         render_snapshot_editor(user_id=user_id)
         st.stop()
     if page == "거래내역 업로드":
         render_transaction_importer(user_id=user_id)
+        st.stop()
+    if page == "만기/해지/출금 관리":
+        from asset_portfolio.dashboard.static_asset_action import render_static_asset_actions
+        render_static_asset_actions(user_id=user_id)
         st.stop()
 
     # --- Main Dashboard Content ---

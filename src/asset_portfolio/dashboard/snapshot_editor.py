@@ -68,7 +68,7 @@ def _upsert_asset_prices(rows: list[dict]) -> None:
 
 
 def render_snapshot_editor(user_id: str):
-    st.title("🏦 Manual Snapshot Editor (예적금/채권/연금)")
+    st.title("🏦 정적 자산 평가액 갱신")
 
     if "snap_busy" not in st.session_state:
         st.session_state["snap_busy"] = False
@@ -83,41 +83,8 @@ def render_snapshot_editor(user_id: str):
         st.info("수동평가 대상 자산(asset_type)이 없습니다. assets에 manual/bond/deposit/pension 등을 지정하세요.")
         return
 
-    # =========================
-    # 0) 단일/멀티 계좌 모드
-    # =========================
-    mode = st.radio(
-        "편집 모드",
-        ["전체 계좌(멀티 편집)", "단일 계좌"],
-        index=0,
-        horizontal=True,
-        disabled=st.session_state["snap_busy"],
-    )
-
-    # =========================
-    # 1) 계좌 선택
-    # =========================
-    if mode == "단일 계좌":
-        selected_acc_label = st.selectbox(
-            "계좌 선택",
-            acc_df["label"].tolist(),
-            disabled=st.session_state["snap_busy"],
-        )
-        selected_accounts = acc_df[acc_df["label"] == selected_acc_label].copy()
-    else:
-        selected_labels = st.multiselect(
-            "편집할 계좌 선택(멀티)",
-            options=acc_df["label"].tolist(),
-            default=acc_df["label"].tolist(),  # ✅ 기본: 전체 계좌
-            disabled=st.session_state["snap_busy"],
-        )
-        if not selected_labels:
-            st.info("선택된 계좌가 없습니다.")
-            return
-        selected_accounts = acc_df[acc_df["label"].isin(selected_labels)].copy()
-
-    # ✅ 편집 대상 account_id 리스트
-    account_ids = selected_accounts["id"].astype(str).tolist()
+    # ✅ 편집 대상: 사용자의 모든 계좌
+    account_ids = acc_df["id"].astype(str).tolist()
 
     snap_date = st.date_input("스냅샷 날짜", value=date.today(), disabled=st.session_state["snap_busy"])
 
@@ -125,34 +92,15 @@ def render_snapshot_editor(user_id: str):
     # 2) 자산 선택 (기본: price_source='manual' 우선 선택은 사용자가 이미 반영 완료하셨다고 하셨으므로,
     #    여기서는 '선택된 자산 라벨'만 받아서 asset_id를 뽑습니다.
     # =========================
-    # manual_assets["label"]은 이미 name_kr/ticker/currency/id를 포함
-    default_labels = manual_assets["label"].tolist()  # ✅ 기본은 전체(원하면 manual만 기본선택 로직 추가 가능)
-
-    selected_asset_labels = st.multiselect(
-        "수정할 자산 선택(수동평가 대상)",
-        options=manual_assets["label"].tolist(),
-        default=default_labels,
-        disabled=st.session_state["snap_busy"],
-    )
-    if not selected_asset_labels:
-        st.info("선택된 자산이 없습니다.")
-        return
-
-    selected_asset_ids = (
-        manual_assets.loc[manual_assets["label"].isin(selected_asset_labels), "id"]
-        .astype(int)
-        .tolist()
-    )
+    # ✅ 사용자의 모든 manual 자산 ID 추출
+    selected_asset_ids = manual_assets["id"].astype(int).tolist()
 
     # =========================
     # 3) 스냅샷 로드 (멀티 계좌)
     # =========================
     snap_df = _load_snapshots_for_date_multi(account_ids, snap_date, selected_asset_ids)
 
-    # 없으면 편집 가능하도록 (계좌 × 자산) 전체 조합을 생성
-    # grid = pd.MultiIndex.from_product([account_ids, selected_asset_ids], names=["account_id", "asset_id"]).to_frame(index=False)
-
-        # =========================
+    # =========================
     # ✅ (중요) 멀티 편집에서는 '전체 곱'이 아니라
     #         실제 존재하는 (account_id, asset_id) pair만 로드합니다.
     # =========================
@@ -166,7 +114,7 @@ def render_snapshot_editor(user_id: str):
         st.info("선택한 계좌들에서 현재 날짜 기준으로 존재하는 수동평가 자산이 없습니다. (스냅샷/거래 기반 pair가 없음)")
         st.stop()
 
-    grid = pairs_df.copy()  # ✅ 이제 grid는 실제 존재하는 pair만 포함
+    grid = pairs_df.copy()
 
     if snap_df.empty:
         base_df = grid.copy()
@@ -177,51 +125,60 @@ def render_snapshot_editor(user_id: str):
         base_df["valuation_amount"] = 0.0
         base_df["purchase_amount"] = 0.0
     else:
-        snap_df["date"] = snap_date.isoformat()  # 날짜 고정
+        snap_df["date"] = snap_date.isoformat()
         base_df = grid.merge(snap_df, on=["account_id", "asset_id"], how="left")
 
-        # ✅ 결측 보정(없는 조합은 생성)
         base_df["date"] = base_df["date"].fillna(snap_date.isoformat())
         for c in ["quantity", "valuation_amount", "purchase_amount"]:
             base_df[c] = pd.to_numeric(base_df[c], errors="coerce").fillna(0.0)
         for c in ["valuation_price", "purchase_price"]:
             base_df[c] = pd.to_numeric(base_df[c], errors="coerce").fillna(1.0)
 
-    # 원금 증감 입력 칼럼 (추가 납입/인출 용도)
-    base_df["원금 증감"] = 0.0
-
     # =========================
     # 4) 보기용 메타 조인: 계좌 라벨 + 자산 라벨
     # =========================
     # 계좌 라벨
-    acc_map = selected_accounts[["id", "label"]].rename(columns={"id": "account_id", "label": "계좌"})
+    acc_map = acc_df[["id", "label"]].rename(columns={"id": "account_id", "label": "계좌"})
     base_df = base_df.merge(acc_map, on="account_id", how="left")
 
-    # 자산 메타
-    ast_map = manual_assets[["id", "name_kr", "ticker", "currency", "asset_type"]].rename(columns={"id": "asset_id"})
+    # 자산 메타 (price_source가 있어야 원금 정보 로드 가능)
+    ast_map = manual_assets[["id", "name_kr", "ticker", "currency", "asset_type", "price_source"]].rename(columns={"id": "asset_id"})
     base_df = base_df.merge(ast_map, on="asset_id", how="left")
 
-    # ✅ 사용자가 편집할 필드: 평가금액
+    # ✅ 최신 원금(Cost Basis) 정보 가져오기 (1회성 보정 및 편집용)
+    from asset_portfolio.backend.services.manual_cost_basis_service import attach_manual_cost_basis
+    # attach_manual_cost_basis는 "assets.price_source" 컬럼을 기본으로 찾으므로 임시로 연결
+    base_df["assets.price_source"] = base_df["price_source"]
+    base_df = attach_manual_cost_basis(base_df, user_id=user_id)
+    
+    if "manual_principal" not in base_df.columns or base_df["manual_principal"].isna().all():
+        # 못 가져온 경우 기존 스냅샷의 purchase_amount 활용
+        base_df["manual_principal"] = base_df["manual_principal"].fillna(base_df["purchase_amount"])
+    
+    base_df["manual_principal"] = pd.to_numeric(base_df["manual_principal"], errors="coerce").fillna(0.0)
+
+    # ✅ 사용자가 편집할 필드
     base_df["평가금액"] = pd.to_numeric(base_df["valuation_amount"], errors="coerce").fillna(0.0)
+    base_df["납입원금"] = base_df["manual_principal"]
 
-    # 표시 컬럼(계좌가 반드시 보이도록)
-    view_cols = ["계좌", "name_kr", "ticker", "currency", "asset_type", "평가금액", "원금 증감"]
+    # 표시 컬럼
+    view_cols = ["계좌", "name_kr", "ticker", "currency", "유형", "평가금액", "납입원금"]
+    base_df = base_df.rename(columns={"asset_type": "유형"})
 
-    st.caption("※ 수동평가 자산은 valuation_price=1로 고정하고, quantity=평가금액(원칙)을 사용합니다.")
-    st.caption("※ 멀티 편집 모드에서는 같은 자산이라도 계좌별로 별도 행으로 표시됩니다.")
+    st.caption("※ 수동평가 자산은 quantity=평가금액으로 관리됩니다. 이 화면에서 **평가액**과 **납입원금**을 직접 수정할 수 있습니다.")
 
     edited = st.data_editor(
         base_df[view_cols],
         width='stretch',
         disabled=st.session_state["snap_busy"],
         column_config={
-            "계좌": st.column_config.TextColumn("계좌", disabled=True),
+            "계좌": st.column_config.TextColumn("계좌명", disabled=True),
             "name_kr": st.column_config.TextColumn("자산명", disabled=True),
             "ticker": st.column_config.TextColumn("Ticker", disabled=True),
             "currency": st.column_config.TextColumn("통화", disabled=True),
-            "asset_type": st.column_config.TextColumn("유형", disabled=True),
+            "유형": st.column_config.TextColumn("유형", disabled=True),
             "평가금액": st.column_config.NumberColumn("평가금액", min_value=0.0, step=1000.0),
-            "원금 증감": st.column_config.NumberColumn("원금 증감", step=1000.0),
+            "납입원금": st.column_config.NumberColumn("납입원금", min_value=0.0, step=1000.0),
         },
     )
 
@@ -243,25 +200,25 @@ def render_snapshot_editor(user_id: str):
                     asset_id = int(base_df.iloc[i]["asset_id"])
                     ccy = str(base_df.iloc[i].get("currency") or "").upper() or None
                     amt = float(row["평가금액"] or 0.0)
-                    delta = float(row["원금 증감"] or 0.0)
+                    new_principal = float(row["납입원금"] or 0.0)
+                    old_principal = float(base_df.iloc[i].get("manual_principal", 0.0))
+                    delta = new_principal - old_principal
 
                     # ✅ 기존 스냅샷(평가금액)과 비교해 차이를 리밸류에이션 거래로 기록
                     original_amt = float(base_df.iloc[i].get("valuation_amount", 0.0))
                     revaluation_qty = amt - original_amt
                     
-                    # ✅ 원금은 그대로 유지 (사용자가 수정하지 않음, cost basis는 별도)
-                    original_purchase_amount = float(base_df.iloc[i].get("purchase_amount", 0.0))
-                    purchase_price = original_purchase_amount / amt if amt > 0 else 0.0
-
+                    # ✅ 원금(purchase_amount)은 수동 자산의 경우 history 보다는 스냅샷 시점의 원금을 의미함
+                    #    (단, manual_cost_basis_service가 우선순위가 높으므로 동기화가 중요)
                     save_rows.append({
                         "date": snap_date.isoformat(),
                         "account_id": account_id,
                         "asset_id": asset_id,
                         "quantity": amt,
                         "valuation_price": 1.0,
-                        "purchase_price": purchase_price,
+                        "purchase_price": new_principal / amt if amt > 0 else 0.0,
                         "valuation_amount": amt,
-                        "purchase_amount": original_purchase_amount,
+                        "purchase_amount": new_principal,
                         "currency": ccy,
                     })
                     
@@ -278,16 +235,16 @@ def render_snapshot_editor(user_id: str):
                             "memo": "Manual Snapshot Update",
                         })
 
-                    if delta != 0:
-                        # 수동 자산의 추가 납입/인출은 cost basis 이벤트로 기록한다.
+                    if abs(delta) > 0.001:
+                        # 수동 자산의 원금 수정은 cost basis 이벤트로 기록한다.
                         cost_basis_events.append({
                             "account_id": account_id,
                             "asset_id": asset_id,
                             "event_date": snap_date.isoformat(),
                             "delta_amount": delta,
-                            "currency": ccy or "",
-                            "reason": "snapshot_editor",
-                            "memo": None,
+                            "currency": ccy or "KRW",
+                            "reason": "snapshot_editor_correction",
+                            "memo": "원금 직접 수정 보정",
                         })
 
                 if new_transactions:
