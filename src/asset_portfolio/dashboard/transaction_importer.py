@@ -16,7 +16,9 @@ from asset_portfolio.backend.services.transaction_service import (
 )
 from asset_portfolio.dashboard.transaction_editor import _load_accounts_df, _load_assets_df
 from asset_portfolio.backend.services.importer.engine import TransactionParser
-from asset_portfolio.backend.services.importer.profiles import AVAILABLE_PROFILES
+from asset_portfolio.backend.services.importer.base import ImportProfile
+from asset_portfolio.backend.services.importer import profiles as static_profiles
+from asset_portfolio.backend.infra import query
 from asset_portfolio.backend.services.asset_alias_service import AssetAliasService
 
 
@@ -571,14 +573,44 @@ def render_transaction_importer(user_id: str) -> None:
     st.title("📥 거래내역 업로더(from HTS)")
     st.caption("CSV/XLSX/클립보드로 매매 내역을 일괄 등록합니다.")
 
+    db_profiles = query.get_import_profiles(user_id)
+    if not db_profiles:
+        st.warning("등록된 HTS 템플릿이 없습니다. '🛠️ 시스템 관리 -> HTS 템플릿 관리' 메뉴에서 템플릿을 생성해주세요.")
+        return
+        
+    available_profiles = []
+    for p_data in db_profiles:
+        if not p_data.get("active", True):
+            continue
+            
+        func_name = p_data.get("preprocess_func_name")
+        preprocess_func = None
+        if func_name and hasattr(static_profiles, func_name):
+            preprocess_func = getattr(static_profiles, func_name)
+            
+        available_profiles.append(ImportProfile(
+            name=p_data["name"],
+            display_name=p_data["display_name"],
+            column_map=p_data.get("column_map", {}),
+            trade_type_map=p_data.get("trade_type_map", {}),
+            numeric_columns=p_data.get("numeric_columns", []),
+            preprocess_func=preprocess_func,
+            default_currency=p_data.get("default_currency"),
+            default_market=p_data.get("default_market")
+        ))
+        
+    if not available_profiles:
+        st.warning("활성화된 HTS 템플릿이 없습니다. 템플릿을 활성화하거나 새로 추가해주세요.")
+        return
+
     # [1단계] 증권사/HTS 양식 선택
     st.markdown("### 1️⃣ 데이터 양식 선택 (필수)")
     selected_idx = st.selectbox(
         "사용할 증권사 HTS 화면(템플릿)을 정확히 선택해주세요",
-        range(len(AVAILABLE_PROFILES)),
-        format_func=lambda i: AVAILABLE_PROFILES[i].display_name
+        range(len(available_profiles)),
+        format_func=lambda i: available_profiles[i].display_name
     )
-    profile = AVAILABLE_PROFILES[selected_idx]
+    profile = available_profiles[selected_idx]
 
     with st.expander("📌 선택된 템플릿의 필수 컬럼 확인", expanded=False):
         st.write(f"아래 컬럼명들이 업로드할 데이터에 포함되어 있어야 합니다.")

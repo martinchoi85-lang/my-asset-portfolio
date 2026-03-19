@@ -15,10 +15,20 @@
 - `def load_asset_prices()`: 특정 자산의 가격 데이터를 조회합니다.
 - `def fetch_all_pagination()`: Supabase 1000행 제한을 우회하기 위한 페이지네이션 헬퍼.
 - `def get_period_cash_flow()`: 특정 기간의 입출금(DEPOSIT, WITHDRAW) 내역을 조회합니다.
+- `def create_account()`: 신규 계좌를 생성합니다.
+- `def get_import_profiles()`: HTS 임포트 프로필 목록을 조회합니다.
+- `def upsert_import_profile()`: HTS 임포트 프로필을 저장/수정합니다.
 
 ## backend\infra\supabase_client.py
 
 - `def get_supabase_client()`: 
+
+## backend\services\asset_handler.py
+
+- `class AssetHandler` (ABC): 자산 유형별(Auto/Manual) 트랜잭션 및 스냅샷 리빌드 인터페이스.
+- `class AutoAssetHandler`: 일반 시장 연동 자산 핸들러.
+- `class ManualAssetHandler`: 예적금 등 수동 관리 자산 핸들러 (Carry-forward 지원).
+- `class AssetManager`: 자산 ID 기반 적절한 Handler 반환 팩토리.
 
 ## backend\services\asset_service.py
 
@@ -164,6 +174,11 @@
   - `def update_transaction_and_rebuild()`: 거래 수정 + 스냅샷 리빌드
   - `def delete_transaction_and_rebuild()`: 거래 삭제 + 스냅샷 리빌드
 
+
+## dashboard\account_editor.py
+
+- `def render_account_editor()`: 계좌 관리 및 신규 계좌 생성 UI (명칭 도우미 포함).
+
 ## dashboard\app.py
 
 - `def _inject_mobile_redirect()`: 
@@ -194,6 +209,11 @@
 - `def _load_accounts_df()`: 
 - `def _load_assets_df()`: 
 - `def render_recurring_order_editor()`: 
+
+
+## dashboard\profile_editor.py
+
+- `def render_profile_editor()`: HTS 템플릿(Import Profile) 관리/편집 UI.
 
 ## dashboard\render.py
 

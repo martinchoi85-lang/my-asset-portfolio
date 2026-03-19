@@ -22,6 +22,37 @@ def get_accounts(user_id: str) -> List[dict]:
     return response.data or []
 
 
+def create_account(account_data: dict) -> dict:
+    """새 계좌를 생성합니다."""
+    supabase = get_supabase_client()
+    response = supabase.table("accounts").insert(account_data).execute()
+    if response.data:
+        return response.data[0]
+    return {}
+
+
+def get_import_profiles(user_id: str) -> List[dict]:
+    """사용자의 HTS 통계 설정 리스트를 불러옵니다."""
+    supabase = get_supabase_client()
+    response = (
+        supabase.table("import_profiles")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("name")
+        .execute()
+    )
+    return response.data or []
+
+
+def upsert_import_profile(profile_data: dict) -> dict:
+    """HTS 통계 설정을 갱신 또는 추가합니다."""
+    supabase = get_supabase_client()
+    response = supabase.table("import_profiles").upsert(profile_data).execute()
+    if response.data:
+        return response.data[0]
+    return {}
+
+
 def _as_date_str(x):
     if x is None:
         return None

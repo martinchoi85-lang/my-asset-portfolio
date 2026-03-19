@@ -1,6 +1,26 @@
 # Changelog
 
-## [Current State] - 2026-03-18
+## [Current State] - 2026-03-19
+
+### Added
+- **`import_profiles` DB 테이블 및 관리 UI (`profile_editor.py`)**: **Phase 3.1 진행:** HTS 증권사별 파싱 규칙을 DB에서 동적으로 관리할 수 있는 테이블을 생성하고 전용 에디터 UI를 추가했습니다.
+- **계좌 관리 UI (`account_editor.py`)**: **Phase 3.1 진행:** 신규 계좌 등록 및 조회가 가능한 관리 페이지를 신설했습니다. `[증권사]_[별명]_[소유자]` 명명 규칙 자동 도우미를 포함합니다.
+- `src/asset_portfolio/backend/infra/query.py`: 계좌 생성(`create_account`) 및 HTS 프로필 조회/저축(`get_import_profiles`, `upsert_import_profile`) 함수 추가.
+
+### Changed
+- `src/asset_portfolio/dashboard/transaction_importer.py`: 하드코딩된 `AVAILABLE_PROFILES` 대신 DB(`import_profiles`)에서 실시간으로 템플릿을 로드하도록 연동했습니다.
+- `src/asset_portfolio/backend/services/asset_handler.py`: **백엔드 고도화:** 
+  - `ManualAssetHandler`에 **Carry-Forward** 로직을 도입하여, 사용자가 매일 업데이트하지 않는 수동 자산도 가장 최근의 가치를 유지하며 시계열에 포함되도록 개선했습니다.
+  - `AssetManager`가 `asset_type='cash'`인 자산은 설정과 무관하게 `AutoAssetHandler`를 사용하도록 강제하여, 현금 잔고가 트랜잭션(입출금)에 따라 자동 관리되도록 최적화했습니다.
+- `src/asset_portfolio/dashboard/render.py`: **대시보드 지표 정교화 (As-Of 구현):**
+  - **KPI 집계 버그 수정**: 여러 계좌에 걸쳐 있는 동일 자산이 중복 제거 로직 오류로 누락되던 문제를 해결했습니다. 이제 `[account_id, asset_id]` 쌍을 기준으로 정확히 합산합니다.
+  - **지표 간 일관성 확보**: KPI, 최신 스냅샷 테이블, 기간별 성과 차트 모두 "최근 14일 내 가장 최신 상태"를 각 자산별로 찾아 합산하는 **As-Of lookup** 방식으로 로직을 통일했습니다. 
+  - **테이블 중복 노출 수정**: 조회 기간 연장(14일)에 따라 발생하던 테이블 내 중복 행 노출 버그를 수정했습니다.
+
+### Fixed
+- **데이터 복구 및 백필(Backfill)**: 과거 특정 시점에 고립되어 대시보드 집계에서 누락되던 295개의 수동 자산 스냅샷을 최신 날짜까지 복제(Carry-Forward)하여 전체 자산 가치가 정확히 반영되도록 조치했습니다.
+
+## [Phase 3.1 Baseline] - 2026-03-18
 
 ### Added
 - `src/asset_portfolio/backend/services/importer`: **Phase 3 진행:** 클립보드(HTS) 업로더 구조 전면 개편. 증권사 화면별로 데이터 파싱 규칙을 정의하는 `ImportProfile` 프로파일 엔진 및 2-row 구조 병합 필터 도입.

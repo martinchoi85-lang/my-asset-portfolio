@@ -87,13 +87,19 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
 
     latest_date = latest_row[0]["date"]
 
+    # ✅ 0일치 방지: 최신 날짜 기준 14일치 데이터를 가져와서 각 자산별 최신(As-Of) 상태를 집합
+    # (이렇게 해야 수동 자산 등 매일 데이터가 없는 경우에도 차트/KPI와 값이 일치됨)
+    from datetime import timedelta
+    lookup_start = (pd.to_datetime(latest_date) - timedelta(days=14)).date().isoformat()
+
     snapshot_query = (
         supabase.table("daily_snapshots")
         .select(
-            "asset_id, account_id, valuation_amount, currency, "
+            "asset_id, account_id, date, valuation_amount, currency, "
             "assets (asset_type, underlying_asset_class)"
         )
-        .eq("date", latest_date)
+        .gte("date", lookup_start)
+        .lte("date", latest_date)
     )
     if account_id and account_id != "__ALL__":
         snapshot_query = snapshot_query.eq("account_id", account_id)
@@ -106,7 +112,12 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
             columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
         )
 
-    df = pd.json_normalize(snapshot_rows, sep=".")
+    df_full = pd.json_normalize(snapshot_rows, sep=".")
+    df_full["date"] = pd.to_datetime(df_full["date"])
+    
+    # 자산별 최신 데이터만 남기기 (As-Of)
+    df_full = df_full.sort_values(["account_id", "asset_id", "date"], ascending=[True, True, False])
+    df = df_full.drop_duplicates(subset=["account_id", "asset_id"])
     df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce").fillna(0)
     df["assets.asset_type"] = df["assets.asset_type"].fillna("미분류")
     df["assets.underlying_asset_class"] = df["assets.underlying_asset_class"].fillna("미분류")
@@ -274,7 +285,7 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
     def _load_latest_snapshot_by_currency(u_id, acc_id, s_date, e_date):
         """daily_snapshots에서 currency별로 valuation/purchase를 합산한다."""
         q = build_daily_snapshots_query(
-            select_cols="date, currency, valuation_amount, purchase_amount",
+            select_cols="date, account_id, asset_id, currency, valuation_amount, purchase_amount",
             start_date=s_date,
             end_date=e_date,
             user_id=u_id,
@@ -286,25 +297,36 @@ def render_kpi_section(user_id: str, account_id: str, start_date: str, end_date:
     snapshot_rows = _load_latest_snapshot_by_currency(user_id, account_id, start_date, end_date)
 
     if snapshot_rows:
-        # 가장 최신 날짜의 스냅샷만 사용
-        latest_date = max(r["date"] for r in snapshot_rows)
-        latest_rows = [r for r in snapshot_rows if r["date"] == latest_date]
-
-        total_val_krw = 0.0
-        total_buy_krw = 0.0
-        for r in latest_rows:
-            val = float(r.get("valuation_amount") or 0)
-            buy = float(r.get("purchase_amount") or 0)
-            currency = (r.get("currency") or "KRW").upper()
-
-            if currency == "USD":
-                # 달러 자산 → 원화로 환산
-                total_val_krw += val * usd_krw
-                total_buy_krw += buy * usd_krw
+        # ✅ 모든 자산의 최신 상태(As-Of)를 가져오기 위해 asset_id별로 가장 최신 날짜의 행만 남김
+        # (주의: _load_latest_snapshot_by_currency 에 asset_id 가 포함되어 있어야 함)
+        df_all = pd.DataFrame(snapshot_rows)
+        if not df_all.empty:
+            # asset_id가 없는 경우(Legacy)를 위해 방어 코드
+            if "asset_id" not in df_all.columns:
+                # asset_id가 없으면 예전처럼 최신 날짜 하루치만 사용
+                latest_date = df_all["date"].max()
+                df_latest = df_all[df_all["date"] == latest_date]
             else:
-                # KRW 및 기타 통화는 그대로 합산 (기타 통화는 추후 확장 가능)
-                total_val_krw += val
-                total_buy_krw += buy
+                df_all = df_all.sort_values(["account_id", "asset_id", "date"], ascending=[True, True, False])
+                df_latest = df_all.drop_duplicates(subset=["account_id", "asset_id"])
+
+            total_val_krw = 0.0
+            total_buy_krw = 0.0
+            
+            for _, r in df_latest.iterrows():
+                val = float(r.get("valuation_amount") or 0)
+                buy = float(r.get("purchase_amount") or 0)
+                currency = (r.get("currency") or "KRW").upper()
+
+                if currency == "USD":
+                    total_val_krw += val * usd_krw
+                    total_buy_krw += buy * usd_krw
+                else:
+                    total_val_krw += val
+                    total_buy_krw += buy
+        else:
+            total_val_krw = 0.0
+            total_buy_krw = 0.0
     else:
         # snapshot_rows가 없으면 기존 portfolio_df 데이터로 fallback
         if not pf_valid.empty:
@@ -925,6 +947,12 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
 
     latest_date = latest_row[0]["date"]
 
+    # ✅ 최신 날짜 하루치가 아니라, 기간 내 모든 데이터를 가져온 뒤 
+    # Pandas에서 자산별 '가장 최신' 행을 골라내는 방식으로 변경 (As-Of)
+    # 단, 너무 먼 과거는 제외하기 위해 최근 14일 정도를 기본 범위로 잡음
+    from datetime import timedelta
+    lookup_start = (pd.to_datetime(latest_date) - timedelta(days=14)).date().isoformat()
+
     rows_query = (
         supabase.table("daily_snapshots")
         .select(
@@ -932,7 +960,8 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
             "valuation_amount, purchase_amount, currency, "
             "assets (name_kr, asset_type, price_source), accounts (name)"
         )
-        .eq("date", latest_date)
+        .gte("date", lookup_start)
+        .lte("date", latest_date)
     )
     if account_id != "__ALL__":
         rows_query = rows_query.eq("account_id", account_id)
@@ -942,8 +971,15 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
         rows_query = rows_query.in_("account_id", user_account_ids)
 
     rows = rows_query.execute().data or []
-
-    if not rows:
+    
+    if rows:
+        # 자산+계좌별 최신 데이터만 남기기
+        df_full = pd.json_normalize(rows, sep=".")
+        df_full["date"] = pd.to_datetime(df_full["date"])
+        # 가장 최신 날짜(date 내림차순)가 위에 오도록 정렬 후 drop_duplicates
+        df_full = df_full.sort_values(["account_id", "asset_id", "date"], ascending=[True, True, False])
+        df = df_full.drop_duplicates(subset=["account_id", "asset_id"])
+    else:
         st.info("최신 스냅샷 데이터를 불러오지 못했습니다.")
         return
 
@@ -955,8 +991,6 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
         index=0,
         label_visibility="collapsed"
     )
-
-    df = pd.json_normalize(rows, sep=".")
 
     # ✅ 필터링 적용
     if view_mode == "📈 시장 연동":
