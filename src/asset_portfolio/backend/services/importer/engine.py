@@ -37,6 +37,14 @@ class TransactionParser:
         # 2. Column Mapping & Basic Normalization
         for raw_col, std_col in self.profile.column_map.items():
             val = row.get(raw_col)
+            
+            # (보완) 만약 raw_col 매핑으로 값을 못 찾았는데(NaN/None), 
+            # row 자체가 이미 std_col 이름을 키로 갖고 있다면 그 값을 사용함.
+            if (pd.isna(val) or val is None) and std_col in row:
+                fallback_val = row.get(std_col)
+                if not pd.isna(fallback_val) and fallback_val is not None:
+                    val = fallback_val
+
             if std_col in self.profile.numeric_columns:
                 val = self._clean_numeric(val)
             standard_data[std_col] = val
@@ -47,12 +55,16 @@ class TransactionParser:
             standard_data["trade_type"] = self.profile.trade_type_map.get(str(raw_trade_type).strip(), "UNKNOWN")
 
         # 4. Asset Resolution (Strict + Alias)
-        asset_name = str(standard_data.get("asset_name", "")).strip()
-        ticker = str(standard_data.get("ticker", "")).strip().upper()
+        # standard_data에서 값을 가져오되, None이면 빈 문자열로 처리 (str(None) -> "None" 방지)
+        asset_name = standard_data.get("asset_name")
+        asset_name = str(asset_name).strip() if asset_name is not None else ""
+        
+        ticker = standard_data.get("ticker")
+        ticker = str(ticker).strip().upper() if ticker is not None else ""
         
         asset_id = None
         # (1) Alias DB 우선 확인
-        if asset_name in self.alias_map:
+        if asset_name and asset_name in self.alias_map:
             asset_id = self.alias_map[asset_name]
         # (2) Ticker 기반 Strict 매칭
         elif ticker:

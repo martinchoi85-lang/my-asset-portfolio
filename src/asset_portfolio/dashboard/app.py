@@ -90,9 +90,6 @@ def render_main_dashboard():
     user = st.session_state.user
     user_id = user['id']
     username = user['username']
-    print("user_id: ", user_id)
-    print("username: ", username)
-    print("user: ", user)
 
     # --- Sidebar ---
     with st.sidebar:

@@ -660,33 +660,69 @@ def render_transaction_importer(user_id: str) -> None:
             
     # 에러 및 추가 작업(Alias 등록) 표시
     if pending_items:
-        st.error(f"⚠️ {len(pending_items)}건의 거래에 매칭되지 않은 [종목명/Ticker]가 존재합니다.")
-        st.warning("아래에서 수동으로 자산(Ticker) 대상을 매핑해주시면 Alias 사전에 등록되어 현재 작업 및 향후 자동 인식됩니다.")
-        
-        assets_df = _load_assets_df()
-        asset_options = assets_df['ticker'] + " - " + assets_df['name'] if not assets_df.empty else pd.Series()
-        
-        need_alias_set = set(item.standard_data.get('asset_name', '') for item in pending_items)
-        alias_saved = False
-        
-        with st.form("alias_registry_form"):
-            new_aliases = {}
-            for missing_name in need_alias_set:
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    st.write(f"👉 **{missing_name}**")
-                with col2:
-                    matched_idx = st.selectbox(f"[{missing_name}] 과 매핑될 실제 자산", options=range(len(asset_options)), format_func=lambda i: asset_options.iloc[i], key=f"alias_{missing_name}")
-                    new_aliases[missing_name] = int(assets_df.iloc[matched_idx]['id'])
-                    
-            if st.form_submit_button("선택한 항목 Alias로 저장 (새로고침)"):
-                for m_name, a_id in new_aliases.items():
-                    AssetAliasService.add_alias(user_id, m_name, a_id)
-                st.success("Alias 사전 업데이트 완료! 데이터 파싱이 재시작됩니다.")
-                st.rerun()
+        print("pending_items>>>>>>>>>>> \n", pending_items)
+        # 1. 유효하지 않은(빈 값 등) asset_name 사전 필터링
+        need_alias_set = set()
+        for item in pending_items:
+            # standard_data에서 먼저 찾고, 없으면 raw_row의 다양한 키를 시도
+            name = (item.standard_data.get('asset_name') or 
+                    item.raw_row.get('asset_name') or 
+                    item.raw_row.get('종목명'))
+            
+            if name and str(name).strip():
+                need_alias_set.add(str(name).strip())
+
+        print("need_alias_set>>>>>>>>>>> \n", need_alias_set)
+
+        if not need_alias_set:
+            # 만약 필터링 후 처리할 Alias가 없다면 에러 메시지를 노출하지 않고 넘어감
+            pass 
+        else:
+            st.error(f"⚠️ {len(pending_items)}건의 거래에 매칭되지 않은 [종목명/Ticker]가 존재합니다.")
+            st.warning("아래에서 수동으로 자산(Ticker) 대상을 매핑해주시면 Alias 사전에 등록됩니다.")
+            
+            assets_df = _load_assets_df()
+            
+            # 2. '이 항목 무시' 옵션 추가를 위한 옵션 리스트 재구성
+            # 인덱스 0번을 '무시'로 사용하기 위해 앞에 하나를 추가합니다.
+            ignore_option = "🚫 이 항목은 무시 (Alias 등록 안 함)"
+            asset_options = pd.concat([pd.Series([ignore_option]), 
+                                    assets_df['ticker'] + " - " + assets_df['name_kr']])
+            
+            alias_saved = False
+            
+            with st.form("alias_registry_form"):
+                new_aliases = {}
+                for missing_name in need_alias_set:
+                    col1, col2 = st.columns([1, 2])
+                    with col1:
+                        st.write(f"👉 **{missing_name}**")
+                    with col2:
+                        # selectbox에서 index=0이 기본값(무시)이 되도록 설정
+                        matched_idx = st.selectbox(
+                            f"[{missing_name}] 과 매핑될 실제 자산", 
+                            options=range(len(asset_options)), 
+                            format_func=lambda i: asset_options.iloc[i], 
+                            key=f"alias_{missing_name}"
+                        )
+                        
+                        # '무시'가 아닌 경우만 저장 딕셔너리에 추가
+                        if matched_idx > 0:
+                            # asset_options에서 한 칸 밀렸으므로 실제 assets_df 인덱스는 -1
+                            new_aliases[missing_name] = int(assets_df.iloc[matched_idx - 1]['id'])
                 
-        # 미매칭 항목이 있으면 업로드 중단
-        return
+                if st.form_submit_button("선택한 항목 Alias로 저장 (새로고침)"):
+                    if new_aliases:
+                        for m_name, a_id in new_aliases.items():
+                            AssetAliasService.add_alias(user_id, m_name, a_id)
+                        st.success("Alias 사전 업데이트 완료! 데이터 파싱이 재시작됩니다.")
+                        st.rerun()
+                    else:
+                        st.info("새로 등록된 Alias가 없습니다. (모든 항목 무시됨)")
+                        # 필요 시 여기서 강제로 진행시키거나 재시작 로직 추가
+            
+            # 미매칭 항목이 남아있다면 업로드 버튼이 나오지 않도록 여기서 return
+            return
 
     # 모두 READY 인 경우
     # 렌더링용 DF 생성
