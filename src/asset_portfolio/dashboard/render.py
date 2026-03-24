@@ -87,10 +87,10 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
 
     latest_date = latest_row[0]["date"]
 
-    # ✅ 0일치 방지: 최신 날짜 기준 14일치 데이터를 가져와서 각 자산별 최신(As-Of) 상태를 집합
+    # ✅ 0일치 방지: 최신 날짜 기준 3일치 데이터를 가져와서 각 자산별 최신(As-Of) 상태를 집합
     # (이렇게 해야 수동 자산 등 매일 데이터가 없는 경우에도 차트/KPI와 값이 일치됨)
     from datetime import timedelta
-    lookup_start = (pd.to_datetime(latest_date) - timedelta(days=14)).date().isoformat()
+    lookup_start = (pd.to_datetime(latest_date) - timedelta(days=3)).date().isoformat()
 
     snapshot_query = (
         supabase.table("daily_snapshots")
@@ -100,6 +100,7 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
         )
         .gte("date", lookup_start)
         .lte("date", latest_date)
+        .order("date", desc=True)
     )
     if account_id and account_id != "__ALL__":
         snapshot_query = snapshot_query.eq("account_id", account_id)
@@ -117,7 +118,7 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
     
     # 자산별 최신 데이터만 남기기 (As-Of)
     df_full = df_full.sort_values(["account_id", "asset_id", "date"], ascending=[True, True, False])
-    df = df_full.drop_duplicates(subset=["account_id", "asset_id"])
+    df = df_full.drop_duplicates(subset=["account_id", "asset_id"]).copy()
     df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce").fillna(0)
     df["assets.asset_type"] = df["assets.asset_type"].fillna("미분류")
     df["assets.underlying_asset_class"] = df["assets.underlying_asset_class"].fillna("미분류")
@@ -911,9 +912,6 @@ def render_asset_return_section(
         )
 
 
-
-
-
 def render_latest_snapshot_table(user_id: str, account_id: str):
     st.subheader("🧾 최신 스냅샷 테이블")
 
@@ -949,9 +947,9 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
 
     # ✅ 최신 날짜 하루치가 아니라, 기간 내 모든 데이터를 가져온 뒤 
     # Pandas에서 자산별 '가장 최신' 행을 골라내는 방식으로 변경 (As-Of)
-    # 단, 너무 먼 과거는 제외하기 위해 최근 14일 정도를 기본 범위로 잡음
+    # 단, 너무 먼 과거는 제외하기 위해 최근 3일 정도를 기본 범위로 잡음
     from datetime import timedelta
-    lookup_start = (pd.to_datetime(latest_date) - timedelta(days=14)).date().isoformat()
+    lookup_start = (pd.to_datetime(latest_date) - timedelta(days=3)).date().isoformat()
 
     rows_query = (
         supabase.table("daily_snapshots")
@@ -962,6 +960,7 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
         )
         .gte("date", lookup_start)
         .lte("date", latest_date)
+        .order("date", desc=True)
     )
     if account_id != "__ALL__":
         rows_query = rows_query.eq("account_id", account_id)
@@ -978,7 +977,7 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
         df_full["date"] = pd.to_datetime(df_full["date"])
         # 가장 최신 날짜(date 내림차순)가 위에 오도록 정렬 후 drop_duplicates
         df_full = df_full.sort_values(["account_id", "asset_id", "date"], ascending=[True, True, False])
-        df = df_full.drop_duplicates(subset=["account_id", "asset_id"])
+        df = df_full.drop_duplicates(subset=["account_id", "asset_id"]).copy()
     else:
         st.info("최신 스냅샷 데이터를 불러오지 못했습니다.")
         return
@@ -994,12 +993,12 @@ def render_latest_snapshot_table(user_id: str, account_id: str):
 
     # ✅ 필터링 적용
     if view_mode == "📈 시장 연동":
-        df = df[df["assets.price_source"].fillna("").str.lower().str.strip() != "manual"]
+        df = df[df["assets.price_source"].fillna("").str.lower().str.strip() != "manual"].copy()
     elif view_mode == "🏦 정적 자산":
-        df = df[df["assets.price_source"].fillna("").str.lower().str.strip() == "manual"]
+        df = df[df["assets.price_source"].fillna("").str.lower().str.strip() == "manual"].copy()
 
     df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce")
-    df = df[df["quantity"].fillna(0) != 0]
+    df = df[df["quantity"].fillna(0) != 0].copy()
     if df.empty:
         st.info("표시할 자산 데이터가 없습니다.")
         return
