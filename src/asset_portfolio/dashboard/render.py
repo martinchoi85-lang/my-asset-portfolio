@@ -2129,16 +2129,16 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
         )
 
         tx_date = st.date_input("거래일", value=selected["transaction_date"])
-        quantity = st.number_input("수량/금액", min_value=0.0, value=float(selected["quantity"] or 0.0), step=1.0)
+        quantity = st.number_input("수량/금액", value=float(selected["quantity"] or 0.0), step=1.0)
 
         if trade_type in {"DEPOSIT", "WITHDRAW"}:
             price = 1.0
-            st.number_input("가격", min_value=0.0, value=1.0, step=1.0, disabled=True)
+            st.number_input("가격", value=1.0, step=1.0, disabled=True)
         else:
-            price = st.number_input("가격", min_value=0.0, value=float(selected["price"] or 0.0), step=1.0)
+            price = st.number_input("가격", value=float(selected["price"] or 0.0), step=1.0)
 
-        fee = st.number_input("수수료", min_value=0.0, value=float(selected.get("fee") or 0.0), step=1.0)
-        tax = st.number_input("세금", min_value=0.0, value=float(selected.get("tax") or 0.0), step=1.0)
+        fee = st.number_input("수수료", value=float(selected.get("fee") or 0.0), step=1.0)
+        tax = st.number_input("세금", value=float(selected.get("tax") or 0.0), step=1.0)
         memo = st.text_input("메모", value=selected.get("memo") or "")
 
         auto_cash = st.checkbox("BUY/SELL 자동 CASH 거래도 함께 조정", value=True)
