@@ -28,6 +28,7 @@ from asset_portfolio.dashboard.transaction_importer import render_transaction_im
 from asset_portfolio.dashboard.asset_editor import render_asset_editor
 from asset_portfolio.dashboard.price_updater import render_price_updater
 from asset_portfolio.dashboard.snapshot_editor import render_snapshot_editor
+# from asset_portfolio.dashboard.ai_report import render_ai_report
 from asset_portfolio.dashboard.recurring_order_editor import render_recurring_order_editor
 
 st.set_page_config(
@@ -103,7 +104,7 @@ def render_main_dashboard():
             "📊 통합 대시보드": ["요약 (Overview)", "성과 (Performance)", "이력 (History)"],
             "📈 시장 연동 자산": ["거래내역 입력", "자산가격 업데이트", "정기매수 관리", "거래내역 업로드"],
             "🏦 정적 자산 (수동)": ["정적 자산 평가액 갱신", "만기/해지/출금 관리"],
-            "🛠️ 시스템 관리": ["HTS 템플릿 관리", "자산 정보 수정", "계좌 관리"],
+            "🛠️ 시스템 관리": ["HTS 템플릿 관리", "자산 정보 수정", "계좌 관리", "AI 보고서 생성"]
         }
         
         # 1. 메인 카테고리 선택
@@ -125,10 +126,15 @@ def render_main_dashboard():
         st.stop()
     if page == "정기매수 관리":
         render_recurring_order_editor(user_id=user_id)
-        st.stop()   
+        st.stop()
     if page == "자산가격 업데이트":
         render_price_updater()
         st.stop()
+    # if page == "AI 보고서 생성":
+    #     from datetime import date, timedelta
+    #     from asset_portfolio.dashboard.ai_report import render_ai_report
+    #     render_ai_report(user_id=user_id, start_date=str(date.today() - timedelta(days=2)), end_date=str(date.today() - timedelta(days=1)))
+    #     st.stop()
     if page == "자산 정보 수정":
         render_asset_editor()
         st.stop()
