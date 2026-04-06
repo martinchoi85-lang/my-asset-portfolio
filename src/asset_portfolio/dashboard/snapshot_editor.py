@@ -271,7 +271,7 @@ def render_snapshot_editor(user_id: str):
                 _upsert_asset_prices(price_rows)
                 # 원금 증감 입력이 있으면 cost basis current까지 갱신한다.
                 if cost_basis_events:
-                    record_cost_basis_events(cost_basis_events)
+                    record_cost_basis_events(user_id, cost_basis_events)
 
             st.success("저장 완료. 대시보드에 즉시 반영됩니다.")
             st.cache_data.clear()

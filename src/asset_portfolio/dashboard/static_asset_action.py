@@ -114,7 +114,7 @@ def render_static_asset_actions(user_id: str):
                         
                         # 수동 자산 원금(cost basis) 차감 이벤트 기록
                         from asset_portfolio.backend.services.manual_cost_basis_service import record_cost_basis_events
-                        record_cost_basis_events([{
+                        record_cost_basis_events(user_id, [{
                             "account_id": account_id,
                             "asset_id": selected_asset["asset_id"],
                             "event_date": action_date.isoformat(),
