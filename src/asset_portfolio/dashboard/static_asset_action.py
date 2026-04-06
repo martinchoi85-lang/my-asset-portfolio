@@ -89,6 +89,7 @@ def render_static_asset_actions(user_id: str):
             interest_income = st.number_input("이자/수익 수령액", min_value=0.0, value=float(selected_asset["valuation"] - selected_asset["principal"]) if selected_asset["valuation"] > selected_asset["principal"] else 0.0, step=1000.0)
             
         auto_cash = st.checkbox("현금 계좌(예수금)로 자동 입금 처리", value=True)
+        is_full_termination = st.checkbox("전액 해지 (잔고 0원 처리)", value=True, help="체크 시, 입력한 출금 금액과 상관없이 남은 스냅샷 잔액(평가액)을 모두 팔아 0원으로 정리합니다.")
         memo = st.text_input("메모", value="정적 자산 출금/해지")
         
         submitted = st.form_submit_button("출금 / 만기 해지 실행")
@@ -98,44 +99,49 @@ def render_static_asset_actions(user_id: str):
                 st.error("출금할 금액을 입력해주세요.")
             else:
                 try:
-                    # 1. 원금 출금 (SELL)
-                    if withdraw_principal > 0:
+                    # 1. 원금 상환 / 해지 매도 기록 (SELL)
+                    sell_qty = float(selected_asset["valuation"]) if is_full_termination else withdraw_principal
+                    
+                    if sell_qty > 0:
                         req_sell = CreateTransactionRequest(
                             account_id=account_id,
                             asset_id=selected_asset["asset_id"],
                             transaction_date=action_date,
                             trade_type="SELL",
-                            quantity=withdraw_principal,
+                            quantity=sell_qty,
                             price=1.0,  # 수동자산은 단가 1.0 취급 (잔액 베이스)
                             memo=memo
                         )
-                        # auto_cash가 켜져 있으면 현금 잔고도 자동 반영
-                        TransactionService.create_transaction_and_rebuild(req=req_sell, auto_cash=auto_cash)
+                        # 여기서는 현금 입금을 아래에서 별도 DEPOSIT로 직접 꽂아주므로 auto_cash=False
+                        TransactionService.create_transaction_and_rebuild(req=req_sell, auto_cash=False)
                         
                         # 수동 자산 원금(cost basis) 차감 이벤트 기록
                         from asset_portfolio.backend.services.manual_cost_basis_service import record_cost_basis_events
+                        
+                        delta_amount = -float(selected_asset["principal"]) if is_full_termination else -withdraw_principal
                         record_cost_basis_events(user_id, [{
                             "account_id": account_id,
                             "asset_id": selected_asset["asset_id"],
                             "event_date": action_date.isoformat(),
-                            "delta_amount": -withdraw_principal,
+                            "delta_amount": delta_amount,
                             "currency": "KRW",
                             "reason": "withdrawal",
                             "memo": memo
                         }])
                         
-                    # 2. 이자 수령 (SELL_FEE 대신 이자도 원금 인출처럼 취급하거나, cash에 바로 꽂아주는 방식)
-                    if interest_income > 0:
-                        if auto_cash:
+                    # 2. 이자 수령 및 총액 예수금 입금
+                    if auto_cash:
+                        total_cash_received = withdraw_principal + interest_income
+                        if total_cash_received > 0:
                             cash_asset_id = TransactionService._get_cash_asset_id_by_currency("KRW")
                             req_interest = CreateTransactionRequest(
                                 account_id=account_id,
                                 asset_id=cash_asset_id,
                                 transaction_date=action_date,
                                 trade_type="DEPOSIT",
-                                quantity=interest_income,
+                                quantity=total_cash_received,
                                 price=1.0,
-                                memo=f"이자 수령: {memo}"
+                                memo=f"출금/수령 합계: {memo}"
                             )
                             TransactionService.create_transaction_and_rebuild(req=req_interest, auto_cash=False) # 이미 cash이므로 미러링 안함
                             
