@@ -115,19 +115,20 @@ def render_static_asset_actions(user_id: str):
                         # 여기서는 현금 입금을 아래에서 별도 DEPOSIT로 직접 꽂아주므로 auto_cash=False
                         TransactionService.create_transaction_and_rebuild(req=req_sell, auto_cash=False)
                         
-                        # 수동 자산 원금(cost basis) 차감 이벤트 기록
+                        # 수동 자산 원금(cost basis) 차감 이벤트 기록 (0.0은 DB 제약조건 위반이므로 필터링)
                         from asset_portfolio.backend.services.manual_cost_basis_service import record_cost_basis_events
                         
                         delta_amount = -float(selected_asset["principal"]) if is_full_termination else -withdraw_principal
-                        record_cost_basis_events(user_id, [{
-                            "account_id": account_id,
-                            "asset_id": selected_asset["asset_id"],
-                            "event_date": action_date.isoformat(),
-                            "delta_amount": delta_amount,
-                            "currency": "KRW",
-                            "reason": "withdrawal",
-                            "memo": memo
-                        }])
+                        if abs(delta_amount) > 0.001:
+                            record_cost_basis_events(user_id, [{
+                                "account_id": account_id,
+                                "asset_id": selected_asset["asset_id"],
+                                "event_date": action_date.isoformat(),
+                                "delta_amount": delta_amount,
+                                "currency": "KRW",
+                                "reason": "withdrawal",
+                                "memo": memo
+                            }])
                         
                     # 2. 이자 수령 및 총액 예수금 입금
                     if auto_cash:
