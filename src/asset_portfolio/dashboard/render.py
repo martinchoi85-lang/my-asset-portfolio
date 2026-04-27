@@ -565,20 +565,25 @@ def render_portfolio_trend_chart(user_id: str, account_id: str, start_date: str,
         full_df["date"] = pd.to_datetime(full_df["date"])
         full_df.set_index("date", inplace=True)
         
+        def get_valid_fluctuation(df):
+            df_copy = df.copy()
+            df_copy["diff"] = df_copy["valuation_amount"].diff()
+            # 이전 값이 0이거나 데이터의 시작점(NaN)일 때 튀는 현상(Cold Start) 방지
+            prev_val = df_copy["valuation_amount"].shift(1)
+            df_copy.loc[prev_val.isna() | (prev_val == 0), "diff"] = 0.0
+            return df_copy.dropna()
+
         # 1. 일별 등락폭 (최근 30일)
         daily_df = full_df[["valuation_amount"]].copy()
-        daily_df["diff"] = daily_df["valuation_amount"].diff()
-        recent_daily = daily_df.tail(30).dropna()
+        recent_daily = get_valid_fluctuation(daily_df).tail(30)
         
         # 2. 월별 등락폭 (최근 12개월)
         monthly_df = full_df[["valuation_amount"]].resample("ME").last()
-        monthly_df["diff"] = monthly_df["valuation_amount"].diff()
-        recent_monthly = monthly_df.tail(12).dropna()
+        recent_monthly = get_valid_fluctuation(monthly_df).tail(12)
         
         # 3. 연별 등락폭 (최근 5년)
         yearly_df = full_df[["valuation_amount"]].resample("YE").last()
-        yearly_df["diff"] = yearly_df["valuation_amount"].diff()
-        recent_yearly = yearly_df.tail(5).dropna()
+        recent_yearly = get_valid_fluctuation(yearly_df).tail(5)
         
         col1, col2, col3 = st.columns(3)
         
@@ -1869,6 +1874,10 @@ def render_realized_pnl_charts(user_id: str, account_id: str, start_date: str, e
         st.info("선택한 기간에 발생한 실현손익 내역이 없습니다.")
         return
         
+    # 데이터 증폭(Fan-out) 버그 방지를 위해 고유 거래 ID(id) 기준으로 중복 제거
+    if "id" in df.columns:
+        df = df.drop_duplicates(subset=["id"]).copy()
+        
     # 날짜를 월 단위로 변환 시도
     # transaction_date 포맷 정규화 (YYYY-MM-DD)
     df["month"] = pd.to_datetime(df["transaction_date"]).dt.to_period("M").astype(str)
@@ -1946,6 +1955,8 @@ def render_realized_pnl_charts(user_id: str, account_id: str, start_date: str, e
 def render_transactions_table_section(user_id: str, account_id: str, start_date: str, end_date: str):
     st.subheader("거래 내역")
 
+    include_internal = st.checkbox("시스템 미러링 기록 포함(내부 현금흐름)", value=False)
+
     supabase = get_supabase_client()
     q = (
         supabase.table("transactions")
@@ -1961,11 +1972,15 @@ def render_transactions_table_section(user_id: str, account_id: str, start_date:
             tax,
             memo,
             realized_pnl,
+            is_external_flow,
             assets ( ticker, name_kr, currency ),
             accounts ( name, brokerage, old_owner, type )
         """)
         .order("transaction_date", desc=True)
     )
+
+    if not include_internal:
+        q = q.eq("is_external_flow", True)
 
     if start_date is not None:
         q = q.gte("transaction_date", start_date)

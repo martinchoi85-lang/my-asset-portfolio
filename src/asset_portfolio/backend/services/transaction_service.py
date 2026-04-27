@@ -27,6 +27,8 @@ class CreateTransactionRequest:
     fee: float = 0.0
     tax: float = 0.0
     memo: Optional[str] = None
+    is_external_flow: bool = True
+    parent_transaction_id: Optional[int] = None
 
 
 class TransactionService:
@@ -125,6 +127,8 @@ class TransactionService:
             "fee": req.fee,
             "tax": req.tax,
             "memo": req.memo,
+            "is_external_flow": req.is_external_flow,
+            "parent_transaction_id": req.parent_transaction_id,
         }
 
         resp = supabase.table("transactions").insert(payload).execute()
@@ -284,6 +288,7 @@ class TransactionService:
         *,
         cash_asset_id: int,
         memo_suffix: str,
+        parent_transaction_id: Optional[int] = None,
     ) -> CreateTransactionRequest:
         """
         BUY/SELL 거래를 CASH 입출금으로 미러링한다.
@@ -310,27 +315,24 @@ class TransactionService:
             fee=0.0,
             tax=0.0,
             memo=f"[AUTO] {req.trade_type} cash mirror {memo_suffix}",
+            is_external_flow=False,
+            parent_transaction_id=parent_transaction_id,
         )
 
     @staticmethod
     def _find_auto_cash_transactions(
         *,
-        account_id: str,
-        cash_asset_id: int,
-        tx_date: date,
+        origin_id: int,
     ) -> List[Dict[str, Any]]:
         """
         AUTO CASH 미러 거래를 찾는다.
-        - 조건: account_id + cash_asset_id + transaction_date + memo startswith '[AUTO]'
+        - 조건: parent_transaction_id
         """
         supabase = get_supabase_client()
         rows = (
             supabase.table("transactions")
             .select("id, transaction_date, trade_type, quantity, price, fee, tax, memo")
-            .eq("account_id", account_id)
-            .eq("asset_id", cash_asset_id)
-            .eq("transaction_date", tx_date.isoformat())
-            .ilike("memo", "[AUTO]%")
+            .eq("parent_transaction_id", origin_id)
             .execute()
             .data or []
         )
@@ -402,6 +404,8 @@ class TransactionService:
                 fee=0.0,
                 tax=0.0,
                 memo=f"[AUTO] {req.trade_type} cash mirror (거래량={gross}, 수수료={fees})",
+                is_external_flow=False,
+                parent_transaction_id=int(tx_row["id"]),
             )
 
             # ✅ cash 거래 insert
@@ -488,14 +492,11 @@ class TransactionService:
                     TransactionService._get_asset_currency(int(original["asset_id"]))
                 )
                 cash_asset_ids.append(original_cash_asset_id)
-                auto_rows = TransactionService._find_auto_cash_transactions(
-                    account_id=original["account_id"],
-                    cash_asset_id=original_cash_asset_id,
-                    tx_date=original_date,
-                )
-                if len(auto_rows) == 1:
-                    supabase.table("transactions").delete().eq("id", auto_rows[0]["id"]).execute()
-                    removed_cash_ids.append(int(auto_rows[0]["id"]))
+                auto_rows = TransactionService._find_auto_cash_transactions(origin_id=tx_id)
+                if len(auto_rows) >= 1:
+                    for r in auto_rows:
+                        supabase.table("transactions").delete().eq("id", r["id"]).execute()
+                        removed_cash_ids.append(int(r["id"]))
 
             # 3) 수정된 거래 기준 AUTO CASH 미러 생성
             if updated_req.trade_type in {"BUY", "SELL"}:
@@ -507,6 +508,7 @@ class TransactionService:
                     updated_req,
                     cash_asset_id=updated_cash_asset_id,
                     memo_suffix=f"(source_tx_id={tx_id})",
+                    parent_transaction_id=tx_id,
                 )
                 created_cash_tx = TransactionService.create_transaction(cash_req)
 
@@ -561,25 +563,23 @@ class TransactionService:
         original = TransactionService.get_transaction_by_id(tx_id)
         original_date = TransactionService._to_date(original["transaction_date"])
 
-        # 1) 본 거래 삭제
-        supabase.table("transactions").delete().eq("id", tx_id).execute()
-
         removed_cash_ids: List[int] = []
         cash_asset_ids: List[int] = []
 
+        # DB CASCADE가 걸려있을 수 있으므로 원본을 지우기 전에 미러 거래를 먼저 조회 및 삭제합니다.
         if auto_cash and original["trade_type"] in {"BUY", "SELL"}:
             original_cash_asset_id = TransactionService._get_cash_asset_id_by_currency(
                 TransactionService._get_asset_currency(int(original["asset_id"]))
             )
             cash_asset_ids.append(original_cash_asset_id)
-            auto_rows = TransactionService._find_auto_cash_transactions(
-                account_id=original["account_id"],
-                cash_asset_id=original_cash_asset_id,
-                tx_date=original_date,
-            )
-            if len(auto_rows) == 1:
-                supabase.table("transactions").delete().eq("id", auto_rows[0]["id"]).execute()
-                removed_cash_ids.append(int(auto_rows[0]["id"]))
+            auto_rows = TransactionService._find_auto_cash_transactions(origin_id=tx_id)
+            if len(auto_rows) >= 1:
+                for r in auto_rows:
+                    supabase.table("transactions").delete().eq("id", r["id"]).execute()
+                    removed_cash_ids.append(int(r["id"]))
+
+        # 1) 본 거래 삭제
+        supabase.table("transactions").delete().eq("id", tx_id).execute()
 
         rebuild_start = original_date
         rebuild_end = date.today()

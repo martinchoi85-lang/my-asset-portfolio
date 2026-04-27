@@ -79,8 +79,8 @@ def main():
         dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
         for file in sorted(files):
             if file.endswith(".py"):
-                full_path = Path(root) / file
-                relative_path = full_path.relative_to(os.getcwd())
+                full_path = (Path(root) / file).resolve()
+                relative_path = full_path.relative_to(Path.cwd().resolve())
                 
                 content.append(f"\n### `{relative_path}`")
                 funcs = extract_functions_from_file(full_path)
@@ -93,7 +93,7 @@ def main():
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         f.write("\n".join(content))
         
-    print(f"✅ Documentation updated: {OUTPUT_PATH}")
+    print(f"[OK] Documentation updated: {OUTPUT_PATH}")
 
 if __name__ == "__main__":
     main()

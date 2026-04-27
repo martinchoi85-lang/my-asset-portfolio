@@ -1,6 +1,17 @@
 # Changelog
 
-## [Current State] - 2026-03-19
+## [Current State] - 2026-04-27
+
+### Added
+- **Transaction Mirroring 리팩토링 (is_external_flow)**: 투자 성과 분석(TWR) 왜곡을 방지하기 위해 '외부 자본 흐름'과 매매 시 발생하는 '시스템 자동 현금 미러링'을 DB 수준에서 구분하도록 리팩토링했습니다.
+- **Portfolio Trend Chart Cold Start 보정**: 데이터 시작점(0원)에서 발생하는 비정상적인 등락폭 왜곡을 제거하기 위해 `get_valid_fluctuation` 가드 로직을 도입했습니다.
+
+### Fixed
+- **Realized PNL Chart 데이터 정합성 개선**: 
+  - DB Join 과정에서 발생할 수 있는 Fan-out(데이터 증폭) 문제를 방지하기 위해 트랜잭션 ID 기준 중복 제거 로직을 추가했습니다.
+  - 현금/예금(Cash, Deposit) 자산의 비정상적인 매도 트랜잭션이 실현손익 지표에 합산되어 차트를 오염시키던 버그를 수정(필터링)했습니다.
+
+## [Phase 3.1 Milestone] - 2026-03-19
 
 ### Added
 - **`import_profiles` DB 테이블 및 관리 UI (`profile_editor.py`)**: **Phase 3.1 진행:** HTS 증권사별 파싱 규칙을 DB에서 동적으로 관리할 수 있는 테이블을 생성하고 전용 에디터 UI를 추가했습니다.

@@ -361,7 +361,7 @@ def get_realized_pnl_by_period(
     supabase = get_supabase_client()
     
     q = supabase.table("transactions").select(
-        "transaction_date, asset_id, realized_pnl, assets!inner(ticker, name_kr, currency)"
+        "transaction_date, asset_id, realized_pnl, assets!inner(ticker, name_kr, currency, asset_type)"
     )
     
     # SELL이고 realized_pnl이 있는 거래만. (not_은 SDK 이슈가 있으므로 파이썬에서 필터링하거나 eq 적용)
@@ -388,8 +388,14 @@ def get_realized_pnl_by_period(
         if pnl is None:
             continue
             
-        pnl = float(pnl)
         asset = r.get("assets") or {}
+        asset_type = str(asset.get("asset_type", "")).strip().lower()
+        
+        # 현금성 자산(현금, 예금)은 투자 실현손익 대상이 아니므로 제외
+        if asset_type in ("cash", "deposit"):
+            continue
+            
+        pnl = float(pnl)
         ccy = str(asset.get("currency", "KRW")).strip().upper()
         # date 파싱 (YYYY-MM-DD 형식으로 변환)
         t_date_str = r.get("transaction_date", "")

@@ -116,14 +116,20 @@ def load_asset_contribution_data(
     return fetch_all_pagination(query.order("date"))
 
 
-def get_transactions(user_id: str) -> List[dict]:
+def get_transactions(user_id: str, include_internal: bool = True) -> List[dict]:
     """사용자의 모든 거래내역을 불러옵니다."""
     supabase = get_supabase_client()
     user_accounts = get_accounts(user_id)
     user_account_ids = [acc['id'] for acc in user_accounts]
     if not user_account_ids:
         return []
-    response = supabase.table("transactions").select("*").in_("account_id", user_account_ids).execute()
+    
+    q = supabase.table("transactions").select("*").in_("account_id", user_account_ids)
+    
+    if not include_internal:
+        q = q.eq("is_external_flow", True)
+        
+    response = q.execute()
     return response.data or []
 
 
@@ -198,6 +204,7 @@ def get_period_cash_flow(user_id: str, account_id: str, start_date: str, end_dat
         supabase.table("transactions")
         .select("transaction_date, trade_type, quantity, price, asset_id, assets!inner(currency)")
         .in_("trade_type", ["DEPOSIT", "WITHDRAW"])
+        .eq("is_external_flow", True)
         .order("transaction_date")
     )
 
