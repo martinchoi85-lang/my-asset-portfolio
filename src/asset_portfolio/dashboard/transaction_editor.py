@@ -36,6 +36,8 @@ def _load_assets_df() -> pd.DataFrame:
         supabase.table("assets")
         .select(
             "id, ticker, name_kr, asset_type, currency, market, underlying_asset_class, "
+            "economic_exposure_region, asset_nature, vehicle_type, fx_exposure_type, "
+            "return_driver, strategy_type, "
             "current_price, price_updated_at, price_update_status, price_update_error, price_source"
         )
         .order("market")

@@ -1,5 +1,12 @@
 # Changelog
 
+## [Current State] - 2026-04-30
+
+### Added
+- **Asset Grouping Pie Chart: 분류기준 추가 지원**: 기본 분류 기준에 '전략 유형'을 추가하고, 이를 지원하기 위해 `asset_grouping_pie_chart` 함수에 `group_options` 파라미터를 도입했습니다.
+  - 연계하여 자산 분류 기준(asset_groupings) DB 스키마를 확장하고, 쿼리 및 집계 로직을 개선했습니다.
+- **Add a new Asset UI 추가**: Asset Editor에 신규 자산 추가 UI를 추가했습니다. 
+
 ## [Current State] - 2026-04-27
 
 ### Added

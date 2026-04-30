@@ -13,9 +13,13 @@ class AssetService:
         underlying_asset_class: str = "Unknown",
         economic_exposure_region: str = "Unknown",
         vehicle_type: str = "Unknown",
+        asset_nature: str = "Unknown",
+        fx_exposure_type: str = "Unknown",
         return_driver: str = "Unknown",
         strategy_type: str = "Unknown",
         lookthrough_available: bool = False,
+        current_price: float = 0.0,
+        price_source: str = "manual",
     ) -> Dict[str, Any]:
         """
         ✅ 최소 입력으로 assets에 신규 자산을 생성합니다.
@@ -33,9 +37,13 @@ class AssetService:
             "underlying_asset_class": underlying_asset_class,
             "economic_exposure_region": economic_exposure_region,
             "vehicle_type": vehicle_type,
+            "asset_nature": asset_nature,
+            "fx_exposure_type": fx_exposure_type,
             "return_driver": return_driver,
             "strategy_type": strategy_type,
             "lookthrough_available": lookthrough_available,
+            "current_price": current_price,
+            "price_source": price_source,
         }
 
         # ✅ 이미 존재하는 ticker면 에러 발생(assets.unique_ticker)

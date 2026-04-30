@@ -23,7 +23,7 @@ def render_account_editor(user_id: str):
             "type": "계좌 타입"
         }
         display_df.rename(columns=rename_map, inplace=True)
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_df, width='stretch', hide_index=True)
     else:
         st.info("등록된 계좌가 없습니다. 하단에서 새 계좌를 추가해주세요.")
 
@@ -42,7 +42,7 @@ def render_account_editor(user_id: str):
             nickname = st.text_input("계좌 닉네임 *", placeholder="예: 연금저축, ISA, 미장")
             acc_type = st.selectbox("계좌 타입", ["STOCK", "CASH", "PENSION", "ETC"])
 
-        submitted = st.form_submit_button("계좌 생성", use_container_width=True)
+        submitted = st.form_submit_button("계좌 생성", width='stretch')
         
         if submitted:
             if not brokerage or not owner or not nickname:

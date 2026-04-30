@@ -22,7 +22,7 @@ def render_profile_editor(user_id: str):
         st.markdown("##### 📌 등록된 템플릿 목록")
         df = pd.DataFrame(profiles)
         display_df = df[["name", "display_name", "default_currency", "default_market", "active"]].copy()
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_df, width='stretch', hide_index=True)
     else:
         st.info("등록된 템플릿이 없습니다. 신규 템플릿을 생성해주세요.")
 
@@ -109,7 +109,7 @@ def render_profile_editor(user_id: str):
                 help='쉼표나 특수문자가 포함된 숫자 데이터에서 문자를 제거하고 숫자로 변환할 필드 목록입니다.'
             )
 
-        submitted = st.form_submit_button("템플릿 저장", use_container_width=True)
+        submitted = st.form_submit_button("템플릿 저장", width='stretch')
         
         if submitted:
             if not p_name or not p_display:

@@ -65,52 +65,113 @@ def _load_latest_holding_asset_ids_global() -> set[int]:
     )
     return {int(r["asset_id"]) for r in rows if r.get("asset_id") is not None}
 
+def _render_suggestion_selectbox(label: str, column_name: str, assets_df: pd.DataFrame, current_value: str) -> str:
+    """
+    ✅ DB의 기존 값들을 드롭다운으로 보여주고, 필요시 직접 입력할 수 있게 합니다.
+    """
+    # 1. 기존 DB 값 추출 (Unique Set)
+    options = sorted([str(x) for x in assets_df[column_name].dropna().unique().tolist() if str(x).strip()])
+    
+    # 2. 현재 값이 옵션에 없으면 추가
+    if current_value and current_value not in options:
+        options.append(current_value)
+        options = sorted(list(set(options)))
+
+    final_options = options + ["[직접 입력]"]
+    
+    # 3. 기본 인덱스 설정
+    default_index = 0
+    if current_value in options:
+        default_index = options.index(current_value)
+    
+    # 4. UI 렌더링
+    choice = st.selectbox(f"{label}", final_options, index=default_index, key=f"sel_{column_name}")
+    
+    if choice == "[직접 입력]":
+        val = st.text_input(f"↳ {label} 직접 입력", value=current_value if current_value not in options else "", key=f"txt_{column_name}")
+    else:
+        val = choice
+        
+    return val
+
 def render_asset_editor():
     st.title("🧩 Asset Editor (V1)")
 
+    # ✅ 작업 모드 선택
+    mode = st.radio("작업 선택", ["기존 자산 수정", "신규 자산 등록"], horizontal=True)
+    is_edit_mode = mode == "기존 자산 수정"
+
     assets_df = _load_assets_df()
-    if assets_df.empty:
-        st.info("등록된 자산이 없습니다.")
-        return
+    
+    asset_id = None
+    row = {}
 
-    # ✅ 보기 좋은 정렬(원하시면 더 정교하게)
-    assets_df = assets_df.sort_values(["market", "asset_type", "underlying_asset_class", "ticker"])
+    if is_edit_mode:
+        if assets_df.empty:
+            st.info("등록된 자산이 없습니다.")
+            return
+        
+        # ✅ 보기 좋은 정렬
+        assets_df = assets_df.sort_values(["market", "asset_type", "underlying_asset_class", "ticker"])
 
-    # ✅ 자산 선택
-    selected_label = st.selectbox("자산 선택", assets_df["label"].tolist())
-    row = assets_df.loc[assets_df["label"] == selected_label].iloc[0]
-    asset_id = int(row["id"])
+        # ✅ 자산 선택
+        selected_label = st.selectbox("자산 선택", assets_df["label"].tolist())
+        row = assets_df.loc[assets_df["label"] == selected_label].iloc[0]
+        asset_id = int(row["id"])
+        st.subheader("✏️ 자산 정보 수정")
+    else:
+        st.subheader("✨ 신규 자산 등록")
+        # 신규 등록을 위한 초기값
+        row = {
+            "ticker": "",
+            "name_kr": "",
+            "market": "korea",
+            "asset_type": "etf",
+            "currency": "krw",
+            "underlying_asset_class": "equity",
+            "economic_exposure_region": "korea",
+            "vehicle_type": "stock",
+            "current_price": 0.0,
+            "lookthrough_available": False,
+            "price_source": "manual"
+        }
 
-    st.subheader("✏️ 자산 정보 수정")
+    # ✅ 핵심 필드들 노출
+    ticker = st.text_input("티커", value=str(row.get("ticker", "")), disabled=is_edit_mode, help="신규 등록 시에만 수정 가능합니다.")
+    name_kr = st.text_input("자산명(한글)", value=str(row.get("name_kr", "")))
 
-    # ✅ 핵심 필드들만 V1에서 노출
-    ticker = st.text_input("티커", value=str(row["ticker"]), disabled=True)  # 안전하게 비활성
-    name_kr = st.text_input("자산명(한글)", value=str(row["name_kr"]))
+    # ✅ 메타데이터 필드들 (드롭다운 적용)
+    col1, col2 = st.columns(2)
+    with col1:
+        asset_type = _render_suggestion_selectbox("자산 유형 (asset_type)", "asset_type", assets_df, str(row.get("asset_type") or ""))
+        currency = _render_suggestion_selectbox("통화 (currency)", "currency", assets_df, str(row.get("currency") or "krw"))
+    with col2:
+        market_options = ["korea", "us", "etc"]
+        market_value = str(row.get("market") or "etc").lower().strip()
+        market = st.selectbox(
+            "시장 (market)",
+            market_options,
+            index=market_options.index(market_value if market_value in market_options else "etc"),
+        )
+        vehicle_type = _render_suggestion_selectbox("상품 형태 (vehicle_type)", "vehicle_type", assets_df, str(row.get("vehicle_type") or ""))
 
-    market_options = ["korea", "us", "etc"]
-    market_value = str(row.get("market") or "etc").lower().strip()
-    market = st.selectbox(
-        "시장",
-        market_options,
-        index=market_options.index(market_value if market_value in market_options else "etc"),
-    )
-    asset_type_options = ["cash", "deposit", "etf", "fund", "tdf"]
-    asset_type_value = str(row.get("asset_type") or "etc").lower().strip()
-    asset_type = st.selectbox(
-        "자산유형",
-        asset_type_options,
-        index=asset_type_options.index(asset_type_value if asset_type_value in asset_type_options else "cash"),
-    )
-    currency = st.selectbox("통화", ["krw", "usd"], index=["krw","usd"].index(str(row.get("currency") or "krw").lower()))
+    st.divider()
+    st.caption("🔍 세부 분류 및 전략 설정")
+    
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        underlying_asset_class = _render_suggestion_selectbox("자산군 (underlying_asset_class)", "underlying_asset_class", assets_df, str(row.get("underlying_asset_class") or ""))
+        economic_exposure_region = _render_suggestion_selectbox("노출 지역 (economic_exposure_region)", "economic_exposure_region", assets_df, str(row.get("economic_exposure_region") or ""))
+        asset_nature = _render_suggestion_selectbox("자산 성격 (asset_nature)", "asset_nature", assets_df, str(row.get("asset_nature") or ""))
+    with c2:
+        fx_exposure_type = _render_suggestion_selectbox("환노출 타입 (fx_exposure_type)", "fx_exposure_type", assets_df, str(row.get("fx_exposure_type") or ""))
+        return_driver = _render_suggestion_selectbox("수익 동인 (return_driver)", "return_driver", assets_df, str(row.get("return_driver") or ""))
+    with c3:
+        strategy_type = _render_suggestion_selectbox("전략 유형 (strategy_type)", "strategy_type", assets_df, str(row.get("strategy_type") or ""))
+        lookthrough_available = st.checkbox("룩스루 가능", value=bool(row.get("lookthrough_available") or False))
 
-    # 분류는 V1에서는 선택 옵션을 최소화
-    underlying_asset_class = st.text_input("자산군(underlying_asset_class)", value=str(row.get("underlying_asset_class") or "Unknown"))
-    economic_exposure_region = st.text_input("노출 지역(economic_exposure_region)", value=str(row.get("economic_exposure_region") or "Unknown"))
-    vehicle_type = st.text_input("상품 형태(vehicle_type)", value=str(row.get("vehicle_type") or "Unknown"))
-
-    current_price = st.number_input("현재가(current_price)", min_value=0.0, value=float(row.get("current_price") or 0.0))
-
-    lookthrough_available = st.checkbox("룩스루 가능(ETF/TDF/Fund의 내부 구성 자산을 분해해서 보는 기능)", value=bool(row.get("lookthrough_available") or False))
+    st.divider()
+    current_price = st.number_input("현재가 (current_price)", min_value=0.0, value=float(row.get("current_price") or 0.0))
 
     st.divider()
     st.subheader("💡 가격 소스 설정")
@@ -120,17 +181,16 @@ def render_asset_editor():
     # - yfinance: 기존 자동 가격 업데이트
     # - krx: KRX 자동 가격 업데이트(이번 추가 기능)
     current_price_source = str(row.get("price_source") or "manual").lower().strip()
-    # ✅ price_source 추가: manual (총액 입력형), manual_price (단가 입력형)
-    price_source_options = ["manual", "manual_price", "yfinance", "krx"]
+    price_source_options = ["manual", "yfinance", "krx"]
     price_source = st.selectbox(
         "price_source",
         price_source_options,
         index=price_source_options.index(current_price_source if current_price_source in price_source_options else "manual"),
-        help="'manual'은 예적금/펀드 등 '총액' 기반, 'manual_price'는 비상장/현물 등 '단가' 기반, 'yfinance/krx'는 자동 가격입니다.",
+        help="'manual'은 예적금/펀드 등 '총액' 기반, 'yfinance/krx'는 자동 가격입니다.",
     )
 
     # ✅ KRX 소스 설정 입력 UI
-    krx_source = _load_asset_price_source(asset_id)
+    krx_source = _load_asset_price_source(asset_id) if asset_id else {}
     krx_params = krx_source.get("source_params") or {}
     holding_asset_ids = _load_latest_holding_asset_ids_global()
 
@@ -201,14 +261,15 @@ def render_asset_editor():
     st.divider()
     col1, col2 = st.columns([1, 1])
     with col1:
-        save = st.button("저장", type="primary")
+        button_label = "자산 정보 수정" if is_edit_mode else "신규 자산 등록"
+        save = st.button(button_label, type="primary")
     with col2:
         st.button("새로고침", on_click=lambda: st.rerun())
 
     if save:
         try:
             with st.spinner("자산 정보를 저장 중..."):
-                updates = {
+                payload = {
                     "name_kr": name_kr,
                     "market": market,
                     "asset_type": asset_type,
@@ -216,27 +277,36 @@ def render_asset_editor():
                     "underlying_asset_class": underlying_asset_class,
                     "economic_exposure_region": economic_exposure_region,
                     "vehicle_type": vehicle_type,
+                    "asset_nature": asset_nature,
+                    "fx_exposure_type": fx_exposure_type,
+                    "return_driver": return_driver,
+                    "strategy_type": strategy_type,
                     "current_price": current_price,
                     "lookthrough_available": lookthrough_available,
                     "price_source": price_source,
                 }
-                # ✅ 빈 값이 들어가지 않도록 최소 방어(원하면 더 강화 가능)
-                updates = {k: v for k, v in updates.items() if v is not None}
+                # ✅ 빈 값이 들어가지 않도록 최소 방어
+                payload = {k: v for k, v in payload.items() if v is not None}
 
-                AssetService.update_asset(asset_id, updates)
+                if is_edit_mode:
+                    AssetService.update_asset(asset_id, payload)
+                else:
+                    # 신규 등록
+                    if not ticker:
+                        st.error("티커를 입력해주세요.")
+                        st.stop()
+                    
+                    payload["ticker"] = ticker
+                    new_asset = AssetService.create_asset_minimal(**payload)
+                    asset_id = new_asset["id"]
 
                 # ✅ price_source가 KRX라면 price source 설정을 저장합니다.
                 if price_source == "krx":
-                    # ✅ JSON 문자열 → dict로 변환
-                    # - JSON 문법 오류가 나면 기본값으로 대체
                     try:
                         query_params = json.loads(krx_query_params_text or "{}")
                     except json.JSONDecodeError:
-                        # ✅ JSON 파싱 실패 시 기본값으로 fallback
                         query_params = {"mktId": "ALL"}
 
-                    # ✅ KRX용 설정을 asset_price_sources에 저장
-                    # - asset_id + source_type 조합으로 업서트(있으면 갱신)
                     source_payload = {
                         "asset_id": asset_id,
                         "source_type": "krx",
@@ -253,8 +323,8 @@ def render_asset_editor():
                     }
                     _upsert_asset_price_source(source_payload)
                 else:
-                    # ✅ KRX 미사용 시 비활성화 처리(선택 사항)
-                    if krx_source.get("id"):
+                    # ✅ KRX 미사용 시 기존 설정이 있다면 비활성화
+                    if is_edit_mode and krx_source.get("id"):
                         _upsert_asset_price_source({
                             "asset_id": asset_id,
                             "source_type": "krx",
@@ -263,7 +333,7 @@ def render_asset_editor():
                             "source_params": krx_source.get("source_params") or {},
                         })
 
-            st.success("저장 완료")
+            st.success(f"성공적으로 {button_label}되었습니다.")
             st.cache_data.clear()
             st.rerun()
         except Exception as e:
