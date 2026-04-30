@@ -61,9 +61,15 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
         account_ids = [acc["id"] for acc in user_accounts]
         if not account_ids:
             return pd.DataFrame(
-                columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
+                columns=[
+                    "asset_type", "underlying_asset_class", 
+                    "currency", "economic_exposure_region", 
+                    "asset_nature", "vehicle_type", "fx_exposure_type", 
+                    "return_driver", "strategy_type", "total_valuation_amount"
+                ]
             )
 
+        
     # ==========================================================
     # 1) 최신 스냅샷 기준으로 daily_snapshots 직접 조회
     #    (asset_summary_live는 currency 콜럼이 없어 FX 변환 불가 → daily_snapshots 사용)
@@ -82,7 +88,12 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
     latest_row = latest_query.execute().data or []
     if not latest_row:
         return pd.DataFrame(
-            columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
+            columns=[
+                "asset_type", "underlying_asset_class", "currency", 
+                "economic_exposure_region", "asset_nature", "vehicle_type", 
+                "fx_exposure_type", "return_driver", "strategy_type", 
+                "total_valuation_amount"
+            ]
         )
 
     latest_date = latest_row[0]["date"]
@@ -96,7 +107,11 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
         supabase.table("daily_snapshots")
         .select(
             "asset_id, account_id, date, valuation_amount, currency, "
-            "assets (asset_type, underlying_asset_class)"
+            "assets ("
+            "  asset_type, underlying_asset_class, economic_exposure_region, "
+            "  asset_nature, vehicle_type, fx_exposure_type, "
+            "  return_driver, strategy_type"
+            ")"
         )
         .gte("date", lookup_start)
         .lte("date", latest_date)
@@ -110,7 +125,12 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
     snapshot_rows = snapshot_query.execute().data or []
     if not snapshot_rows:
         return pd.DataFrame(
-            columns=["asset_type", "underlying_asset_class", "total_valuation_amount"]
+            columns=[
+                "asset_type", "underlying_asset_class", "currency", 
+                "economic_exposure_region", "asset_nature", "vehicle_type", 
+                "fx_exposure_type", "return_driver", "strategy_type", 
+                "total_valuation_amount"
+            ]
         )
 
     df_full = pd.json_normalize(snapshot_rows, sep=".")
@@ -122,6 +142,15 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
     df["valuation_amount"] = pd.to_numeric(df["valuation_amount"], errors="coerce").fillna(0)
     df["assets.asset_type"] = df["assets.asset_type"].fillna("미분류")
     df["assets.underlying_asset_class"] = df["assets.underlying_asset_class"].fillna("미분류")
+    
+    # 신규 추가 컬럼들에 대한 결측치 처리
+    for col in [
+        "assets.economic_exposure_region", "assets.asset_nature", 
+        "assets.vehicle_type", "assets.fx_exposure_type", 
+        "assets.return_driver", "assets.strategy_type"
+    ]:
+        if col in df.columns:
+            df[col] = df[col].fillna("미분류")
 
     # ✅ USD 자산 KRW 환산
     df = FxService.apply_fx_to_df(df, usd_krw, amount_cols=["valuation_amount"], currency_col="currency")
@@ -130,11 +159,22 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
         columns={
             "assets.asset_type": "asset_type",
             "assets.underlying_asset_class": "underlying_asset_class",
+            "assets.economic_exposure_region": "economic_exposure_region",
+            "assets.asset_nature": "asset_nature",
+            "assets.vehicle_type": "vehicle_type",
+            "assets.fx_exposure_type": "fx_exposure_type",
+            "assets.return_driver": "return_driver",
+            "assets.strategy_type": "strategy_type",
             "valuation_amount": "total_valuation_amount",
         }
     )
 
-    return df[["asset_type", "underlying_asset_class", "total_valuation_amount"]]
+    return df[[
+        "asset_type", "underlying_asset_class", "currency",
+        "economic_exposure_region", "asset_nature", "vehicle_type",
+        "fx_exposure_type", "return_driver", "strategy_type",
+        "total_valuation_amount"
+    ]]
 
 
 def render_asset_grouping_pie_section(user_id: str, account_id: str):
@@ -147,6 +187,13 @@ def render_asset_grouping_pie_section(user_id: str, account_id: str):
     group_options = {
         "자산 유형 (asset_type)": "asset_type",
         "기초자산 클래스 (underlying_asset_class)": "underlying_asset_class",
+        "통화 (currency)": "currency",
+        "경제적 노출 지역 (economic_exposure_region)": "economic_exposure_region",
+        "자산 성격 (asset_nature)": "asset_nature",
+        "투자 상품 유형 (vehicle_type)": "vehicle_type",
+        "환율 노출 유형 (fx_exposure_type)": "fx_exposure_type",
+        "수익원 (return_driver)": "return_driver",
+        "투자 전략 (strategy_type)": "strategy_type"
     }
 
     # 사용자가 어떤 기준으로 묶을지 선택하도록 제공
@@ -186,6 +233,50 @@ def render_asset_grouping_pie_section(user_id: str, account_id: str):
         "Equity": "주식",
         "Other": "기타",
     }
+    region_map = {
+        "korea": "국내",
+        "us": "미국"
+    }
+    currency_map = {
+        "krw": "원",
+        "usd": "달러"
+    }
+    asset_nature_map = {
+        "physical": "실물자산",
+        "debt": "채권",
+        "equity": "주식",
+        "hybrid": "혼합형",
+        "derivative": "파생상품"
+    }
+    vehicle_type_map = {
+        "etf": "ETF",
+        "tdf": "TDF",
+        "fund": "펀드",
+        "stock": "주식",
+        "cash_account": "현금(예수금)",
+        "deposit": "예적금",
+        "reits": "리츠",
+        "mmf": "MMF"
+    }
+    fx_exposure_type_map = {
+        "unhedged": "환노출 없음",
+        "natural_hedge": "헤지",
+        "krw_denominated": "원화표시"
+    }
+    return_driver_map = {
+        "inflation_hedge": "인플레이션 헤지",
+        "yield": "인컴",
+        "diversification": "분산",
+        "price_appreciation": "시세차익",
+        "alpha": "알파(시장 대비 초과 수익 추구)"
+    }
+    strategy_type_map = {
+        "passive_beta": "패시브(시장 추종)",
+        "absolute_return": "절대수익 추구",
+        "thematic": "테마형",
+        "active": "액티브(시장 초과수익 추구)",
+        "factor": "팩터(요인)"
+    }
     
     # 맵핑 적용 함수
     def _map_label(val):
@@ -195,6 +286,20 @@ def render_asset_grouping_pie_section(user_id: str, account_id: str):
             return type_map.get(lower_s, s)
         elif group_key == "underlying_asset_class":
             return class_map.get(s, s)
+        elif group_key == "economic_exposure_region":
+            return region_map.get(s, s)
+        elif group_key == "currency":
+            return currency_map.get(s, s)
+        elif group_key == "asset_nature":
+            return asset_nature_map.get(s, s)
+        elif group_key == "vehicle_type":
+            return vehicle_type_map.get(s, s)
+        elif group_key == "fx_exposure_type":
+            return fx_exposure_type_map.get(s, s)
+        elif group_key == "return_driver":
+            return return_driver_map.get(s, s)
+        elif group_key == "strategy_type":
+            return strategy_type_map.get(s, s)
         return s
 
     # 시각화를 위한 파이 차트 (Plotly)
