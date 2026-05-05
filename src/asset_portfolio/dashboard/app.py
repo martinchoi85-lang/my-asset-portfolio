@@ -101,7 +101,7 @@ def render_main_dashboard():
 
         # 메뉴 아키텍처 개편 (Two-Track UI) - 도메인 그룹화 (3뎁스 지양)
         menu_items = {
-            "📊 통합 대시보드": ["요약 (Overview)", "성과 (Performance)", "이력 (History)"],
+            "📊 통합 대시보드": ["요약 (Overview)", "성과 (Performance)", "이력 (History)", "리밸런싱 (Rebalancing)"],
             "📈 시장 연동 자산": ["거래내역 입력", "자산가격 업데이트", "정기매수 관리", "거래내역 업로드"],
             "🏦 정적 자산 (수동)": ["정적 자산 평가액 갱신", "만기/해지/출금 관리"],
             "🛠️ 시스템 관리": ["HTS 템플릿 관리", "자산 정보 수정", "계좌 관리", "AI 보고서 생성"]
@@ -158,7 +158,7 @@ def render_main_dashboard():
         st.stop()
 
     # --- Main Dashboard Content ---
-    if page in ["요약 (Overview)", "성과 (Performance)", "이력 (History)"]:
+    if page in ["요약 (Overview)", "성과 (Performance)", "이력 (History)", "리밸런싱 (Rebalancing)"]:
         portfolio_title = "지온이의 포트폴리오" if username == "지온이" else "승엽&민희 자산 포트폴리오"
         
         mobile_url = os.environ.get("MOBILE_URL")
@@ -178,8 +178,8 @@ def render_main_dashboard():
         if not account_id:
             st.stop()
         
-        # '요약' 탭에서는 기간 선택기를 숨김
-        if page == "요약 (Overview)":
+        # '요약', '리밸런싱' 탭에서는 기간 선택기를 숨김
+        if page in ["요약 (Overview)", "리밸런싱 (Rebalancing)"]:
             # 전체 기간 혹은 최신 데이터를 위한 임의의 기본값 사용 (렌더링 시에는 기간무관한 데이터만 사용하지만 방어 목적)
             from datetime import date, timedelta
             start_date, end_date = str(date.today() - timedelta(days=365)), str(date.today())
@@ -267,6 +267,10 @@ def render_main_dashboard():
 
             # 4. 자산별 보유기간 분석
             render_holding_period_section(user_id, account_id)
+
+        elif page == "리밸런싱 (Rebalancing)":
+            from asset_portfolio.dashboard.render_rebalancing import render_rebalancing_page
+            render_rebalancing_page(user_id, account_id)
 
 # --- Main app execution logic ---
 _inject_mobile_redirect()

@@ -1,6 +1,6 @@
 # 📂 Project Structure & Function List
 
-Last Updated: 2026-04-27
+Last Updated: 2026-04-30
 
 ## 1. Directory Tree
 ```
@@ -279,6 +279,7 @@ src/asset_portfolio/
 - `def _load_asset_price_source()`: ✅ asset_price_sources에서 특정 자산의 설정을 가져옵니다.
 - `def _upsert_asset_price_source()`: ✅ asset_price_sources 업서트
 - `def _load_latest_holding_asset_ids_global()`: Load asset_ids held on the latest snapshot date across all accounts.
+- `def _render_suggestion_selectbox()`: ✅ DB의 기존 값들을 드롭다운으로 보여주고, 필요시 직접 입력할 수 있게 합니다.
 - `def render_asset_editor()`
 
 ### `src\asset_portfolio\dashboard\data.py`

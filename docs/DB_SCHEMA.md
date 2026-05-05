@@ -201,3 +201,16 @@ CREATE TABLE public.users (
   password text NOT NULL,
   CONSTRAINT users_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.portfolio_target_weights (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  user_id uuid NOT NULL,
+  account_id uuid,
+  grouping_criteria text NOT NULL,
+  target_category text NOT NULL,
+  target_weight numeric NOT NULL CHECK (target_weight >= 0::numeric AND target_weight <= 100::numeric),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT portfolio_target_weights_pkey PRIMARY KEY (id),
+  CONSTRAINT fk_ptw_user FOREIGN KEY (user_id) REFERENCES public.users(id),
+  CONSTRAINT fk_ptw_account FOREIGN KEY (account_id) REFERENCES public.accounts(id),
+  CONSTRAINT portfolio_target_weights_unique UNIQUE NULLS NOT DISTINCT (user_id, account_id, grouping_criteria, target_category)
+);
