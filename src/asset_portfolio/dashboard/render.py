@@ -42,7 +42,7 @@ def load_portfolio_return_series_cached(user_id: str, account_id: str, start_dat
 
 
 @st.cache_data(ttl=600)
-def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
+def load_asset_grouping_summary(user_id: str, account_id: str, apply_lookthrough: bool = False) -> pd.DataFrame:
     """
     자산 분류 기준(자산 유형/기초자산 클래스)별 평가금액 합계를 가져옵니다.
 
@@ -169,6 +169,11 @@ def load_asset_grouping_summary(user_id: str, account_id: str) -> pd.DataFrame:
         }
     )
 
+    # ✅ Look-through 보정 적용 (선택적)
+    if apply_lookthrough:
+        from asset_portfolio.backend.services.lookthrough_service import apply_lookthrough_to_grouping_df
+        df = apply_lookthrough_to_grouping_df(df, supabase)
+
     return df[[
         "asset_type", "underlying_asset_class", "currency",
         "economic_exposure_region", "asset_nature", "vehicle_type",
@@ -204,7 +209,7 @@ def render_asset_grouping_pie_section(user_id: str, account_id: str):
     group_key = group_options[selected_label]
 
     # DB에서 데이터를 가져오고, 선택된 기준으로 그룹 집계
-    raw_df = load_asset_grouping_summary(user_id=user_id, account_id=account_id)
+    raw_df = load_asset_grouping_summary(user_id=user_id, account_id=account_id, apply_lookthrough=True)
     if raw_df.empty:
         st.info("표시할 자산 데이터가 없습니다.")
         return

@@ -5,6 +5,7 @@ import pandas as pd
 from asset_portfolio.backend.services.asset_service import AssetService
 from asset_portfolio.dashboard.transaction_editor import _load_assets_df  # 이미 있다면 재사용
 from asset_portfolio.backend.infra.supabase_client import get_supabase_client
+from asset_portfolio.backend.infra import query
 
 
 def _load_asset_price_source(asset_id: int) -> dict:
@@ -170,6 +171,66 @@ def render_asset_editor():
         strategy_type = _render_suggestion_selectbox("전략 유형 (strategy_type)", "strategy_type", assets_df, str(row.get("strategy_type") or ""))
         lookthrough_available = st.checkbox("룩스루 가능", value=bool(row.get("lookthrough_available") or False))
 
+    # ✅ Look-through 세그먼트 편집 UI
+    segments_to_save = []
+    if lookthrough_available:
+        st.divider()
+        st.subheader("📊 세그먼트 구성 (Look-through)")
+        st.caption("해당 자산이 내부적으로 어떤 자산군으로 구성되어 있는지 입력하세요.")
+
+        # 초기 데이터 프레임 생성 (컬럼 구조 및 타입 보장)
+        initial_segments_df = pd.DataFrame(columns=["segment_asset_class", "weight"])
+        if is_edit_mode and asset_id:
+            existing_segments = query.get_asset_segments(asset_id)
+            if existing_segments:
+                initial_segments_df = pd.DataFrame(existing_segments)
+        
+        # 필수 컬럼 보장 및 초기값 설정 (None 대신 기본값 사용)
+        if "segment_asset_class" not in initial_segments_df.columns:
+            initial_segments_df["segment_asset_class"] = ""
+        if "weight" not in initial_segments_df.columns:
+            initial_segments_df["weight"] = 0.0
+            
+        # 데이터 타입 강제 변환
+        initial_segments_df["weight"] = pd.to_numeric(initial_segments_df["weight"], errors="coerce").fillna(0.0).astype(float)
+        
+        # 자산군 선택 옵션 (기존 asset_type 목록 활용)
+        asset_type_options = sorted(assets_df["asset_type"].dropna().unique().tolist())
+
+        edited_segments_df = st.data_editor(
+            initial_segments_df,
+            num_rows="dynamic",
+            column_config={
+                "segment_asset_class": st.column_config.SelectboxColumn(
+                    "자산군", 
+                    options=asset_type_options,
+                    required=True
+                ),
+                "weight": st.column_config.NumberColumn("비중 (%)", min_value=0.0, max_value=100.0, required=True, format="%.2f"),
+            },
+            key=f"lt_editor_{asset_id}", # 자산별로 고유 키 부여하여 상태 꼬임 방지
+            hide_index=True,
+            width='stretch'
+        )
+        segments_to_save = edited_segments_df.to_dict("records")
+        
+        # ✅ 합계 계산 (리스트 에러 방지를 위해 요소별로 안전하게 처리)
+        def _get_scalar_weight(val):
+            if isinstance(val, (list, pd.Series, pd.Index)):
+                return float(val[0]) if len(val) > 0 else 0.0
+            try:
+                return float(val) if val is not None else 0.0
+            except:
+                return 0.0
+
+        total_weight = sum(_get_scalar_weight(row.get("weight")) for row in segments_to_save)
+        
+        if len(segments_to_save) > 0:
+            if abs(total_weight - 100.0) < 0.01:
+                st.success(f"비중 합계: {total_weight:.2f}% (정상)")
+            else:
+                st.error(f"비중 합계: {total_weight:.2f}% (100%여야 합니다)")
+
     st.divider()
     current_price = st.number_input("현재가 (current_price)", min_value=0.0, value=float(row.get("current_price") or 0.0))
 
@@ -299,6 +360,28 @@ def render_asset_editor():
                     payload["ticker"] = ticker
                     new_asset = AssetService.create_asset_minimal(**payload)
                     asset_id = new_asset["id"]
+
+                # ✅ Look-through 세그먼트 저장
+                if lookthrough_available:
+                    # UI 섹션에서 사용한 것과 동일한 안전한 합계 계산 로직 사용
+                    def _get_scalar_weight(val):
+                        if isinstance(val, (list, pd.Series, pd.Index)):
+                            return float(val[0]) if len(val) > 0 else 0.0
+                        try:
+                            return float(val) if val is not None else 0.0
+                        except:
+                            return 0.0
+                            
+                    total_weight = sum(_get_scalar_weight(s.get("weight")) for s in segments_to_save)
+                    
+                    if abs(total_weight - 100.0) > 0.01:
+                        st.error(f"세그먼트 비중 합계가 {total_weight:.2f}%입니다. 100%여야 저장이 가능합니다.")
+                        st.stop()
+                    query.upsert_asset_segments(asset_id, segments_to_save)
+                else:
+                    # lookthrough_available이 False면 기존 세그먼트가 있을 경우 삭제
+                    if is_edit_mode:
+                        query.upsert_asset_segments(asset_id, [])
 
                 # ✅ price_source가 KRX라면 price source 설정을 저장합니다.
                 if price_source == "krx":

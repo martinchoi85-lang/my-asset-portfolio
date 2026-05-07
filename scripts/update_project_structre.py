@@ -4,7 +4,7 @@ from pathlib import Path
 
 # --- 설정 ---
 ROOT_DIR = "src/asset_portfolio"
-OUTPUT_PATH = "docs/Project_structure.md"
+OUTPUT_PATH = "docs/ARCHITECTURE.md"
 EXCLUDE_DIRS = {"__pycache__", ".venv", ".git", ".pytest_cache", ".streamlit"}
 
 def get_project_tree(root_dir, indent=""):

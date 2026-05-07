@@ -1,6 +1,6 @@
 # 📂 Project Structure & Function List
 
-Last Updated: 2026-04-30
+Last Updated: 2026-05-07
 
 ## 1. Directory Tree
 ```
@@ -31,6 +31,7 @@ src/asset_portfolio/
 │       ├── portfolio_service.py
 │       ├── portfolio_weight_service.py
 │       ├── price_updater_service.py
+│       ├── rebalancing_service.py
 │       ├── snapshot_frame.py
 │       ├── tests
 │       └── transaction_service.py
@@ -45,6 +46,7 @@ src/asset_portfolio/
 │   ├── profile_editor.py
 │   ├── recurring_order_editor.py
 │   ├── render.py
+│   ├── render_rebalancing.py
 │   ├── snapshot_editor.py
 │   ├── static_asset_action.py
 │   ├── transaction_editor.py
@@ -80,6 +82,8 @@ src/asset_portfolio/
 - `def get_transactions()`: 사용자의 모든 거래내역을 불러옵니다.
 - `def get_recurring_orders()`: 사용자의 모든 정기주문을 불러옵니다.
 - `def get_assets()`: 모든 자산 정보를 불러옵니다.
+- `def get_asset_segments()`: 특정 자산의 세그먼트(Look-through) 정보를 불러옵니다.
+- `def upsert_asset_segments()`: 특정 자산의 세그먼트 정보를 갱신합니다. (기존 데이터 삭제 후 재삽입)
 - `def load_asset_prices()`: 특정 자산의 가격 데이터를 조회합니다.
 - `def fetch_all_pagination()`: Supabase 1000행 제한을 우회하기 위한 페이지네이션 헬퍼.
 - `def get_period_cash_flow()`: 특정 기간의 입출금(DEPOSIT, WITHDRAW) 내역을 조회합니다.
@@ -216,6 +220,12 @@ src/asset_portfolio/
   - `def _get_first_transaction_date()`: ✅ (asset_id, account_id)의 최초 거래일을 조회합니다.
   - `def rebuild_snapshots_for_updated_assets()`: ✅ 가격 업데이트 후 스냅샷 자동 리빌드
 
+### `src\asset_portfolio\backend\services\rebalancing_service.py`
+- `class RebalancingService`
+  - `def get_target_weights()`: 특정 사용자와 그룹핑 기준에 대한 목표 비중을 조회합니다.
+  - `def save_target_weights_bulk()`: 목표 비중을 일괄 저장합니다 (기존 기준 삭제 후 새로 삽입).
+  - `def calculate_rebalancing_gap()`: 현재 비중과 목표 비중을 비교하여 차이(Gap)를 계산합니다.
+
 ### `src\asset_portfolio\backend\services\snapshot_frame.py`
 - `def _flatten_rows()`: Supabase(PostgREST) 응답 rows는 join/select에 따라 중첩 dict가 섞일 수 있음.
 - `def _to_yyyy_mm_dd()`
@@ -325,6 +335,10 @@ src/asset_portfolio/
 - `def render_transactions_table_section()`
 - `def render_asset_transaction_history()`: 보유 중인 자산을 선택하여 해당 자산의 전체 거래 내역을 조회합니다.
 - `def render_holding_period_section()`
+
+### `src\asset_portfolio\dashboard\render_rebalancing.py`
+- `def get_grouping_options_and_maps()`
+- `def render_rebalancing_page()`
 
 ### `src\asset_portfolio\dashboard\snapshot_editor.py`
 - `def _load_manual_assets_df()`

@@ -151,6 +151,31 @@ def get_assets() -> List[dict]:
     return response.data or []
 
 
+def get_asset_segments(asset_id: int) -> List[dict]:
+    """특정 자산의 세그먼트(Look-through) 정보를 불러옵니다."""
+    supabase = get_supabase_client()
+    response = (
+        supabase.table("asset_segments")
+        .select("segment_asset_class, weight")
+        .eq("asset_id", asset_id)
+        .execute()
+    )
+    return response.data or []
+
+
+def upsert_asset_segments(asset_id: int, segments: List[dict]) -> None:
+    """특정 자산의 세그먼트 정보를 갱신합니다. (기존 데이터 삭제 후 재삽입)"""
+    supabase = get_supabase_client()
+    # 1. 기존 데이터 삭제
+    supabase.table("asset_segments").delete().eq("asset_id", asset_id).execute()
+
+    # 2. 새로운 데이터 삽입
+    if segments:
+        for s in segments:
+            s["asset_id"] = asset_id
+        supabase.table("asset_segments").insert(segments).execute()
+
+
 
 
 def load_asset_prices(asset_id: int, start_date: str, end_date: str) -> List[dict]:

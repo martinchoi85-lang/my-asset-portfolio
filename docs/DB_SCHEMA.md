@@ -154,6 +154,18 @@ CREATE TABLE public.manual_asset_cost_basis_events (
   CONSTRAINT fk_mcb_event_account FOREIGN KEY (account_id) REFERENCES public.accounts(id),
   CONSTRAINT fk_mcb_event_asset FOREIGN KEY (asset_id) REFERENCES public.assets(id)
 );
+CREATE TABLE public.portfolio_target_weights (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  user_id uuid NOT NULL,
+  account_id uuid,
+  grouping_criteria text NOT NULL,
+  target_category text NOT NULL,
+  target_weight numeric NOT NULL CHECK (target_weight >= 0::numeric AND target_weight <= 100::numeric),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT portfolio_target_weights_pkey PRIMARY KEY (id),
+  CONSTRAINT portfolio_target_weights_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id),
+  CONSTRAINT portfolio_target_weights_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id)
+);
 CREATE TABLE public.recurring_orders (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   account_id uuid NOT NULL,
@@ -200,17 +212,4 @@ CREATE TABLE public.users (
   username text NOT NULL UNIQUE,
   password text NOT NULL,
   CONSTRAINT users_pkey PRIMARY KEY (id)
-);
-CREATE TABLE public.portfolio_target_weights (
-  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
-  user_id uuid NOT NULL,
-  account_id uuid,
-  grouping_criteria text NOT NULL,
-  target_category text NOT NULL,
-  target_weight numeric NOT NULL CHECK (target_weight >= 0::numeric AND target_weight <= 100::numeric),
-  updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT portfolio_target_weights_pkey PRIMARY KEY (id),
-  CONSTRAINT fk_ptw_user FOREIGN KEY (user_id) REFERENCES public.users(id),
-  CONSTRAINT fk_ptw_account FOREIGN KEY (account_id) REFERENCES public.accounts(id),
-  CONSTRAINT portfolio_target_weights_unique UNIQUE NULLS NOT DISTINCT (user_id, account_id, grouping_criteria, target_category)
 );

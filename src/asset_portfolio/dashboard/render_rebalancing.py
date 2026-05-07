@@ -103,7 +103,7 @@ def render_rebalancing_page(user_id: str, account_id: str):
                 "목표 비중 (%)": st.column_config.NumberColumn("목표 비중 (%)", min_value=0.0, max_value=100.0, format="%.1f%%")
             },
             hide_index=True,
-            use_container_width=True
+            width='stretch'
         )
         
         total_weight = edited_df["목표 비중 (%)"].sum() if not edited_df.empty else 0.0
@@ -160,7 +160,7 @@ def render_rebalancing_page(user_id: str, account_id: str):
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 yaxis_title="비중 (%)"
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             
         st.markdown("---")
         st.markdown("#### 💰 리밸런싱 필요 금액 (Action Table)")
@@ -191,6 +191,6 @@ def render_rebalancing_page(user_id: str, account_id: str):
                 "비중 차이 (%p)": "{:+.1f}",
                 "현재 평가금액 (KRW)": "{:,.0f}"
             }),
-            use_container_width=True,
+            width='stretch',
             hide_index=True
         )
