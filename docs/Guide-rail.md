@@ -24,7 +24,29 @@
 
 ---
 
-## 2. Streamlit UI Components
+## 2.PostgREST (Supabase) Server-Side Row Limit (1,000 Rows)
+*   **현상**: DB에 1,000개 이상의 레코드가 존재하더라도, .select() 호출 시 1,000개까지만 반환되고 나머지는 누락됨. 클라이언트에서 range(0, 10000) 처럼 큰 범위를 요청하더라도 서버의 max-rows 설정에 의해 강제로 제한됨.
+*   **가이드**:
+    *   대량의 데이터를 조회할 때는 단일 요청에 의존하지 말고, while 루프와 range(offset, offset + limit - 1)를 이용한 **페이지네이션(Pagination)**을 반드시 구현하라.
+    *   가져온 데이터 뭉치(Batch)의 크기가 limit과 같다면 다음 페이지가 더 있을 가능성이 높으므로, 데이터가 더 이상 없을 때까지 반복 호출하여 리스트를 병합하라.
+    ```kotlin
+    // Good: Pagination Pattern in Kotlin
+    val allData = mutableListOf<T>()
+    var offset = 0L
+    val limit = 1000L
+    while (true) {
+        val batch = client.from("table").select {
+            range(offset, offset + limit - 1)
+        }.decodeList<T>()
+        
+        allData.addAll(batch)
+        if (batch.size < limit.toInt()) break // 가져온 데이터가 limit보다 적으면 종료
+        offset += limit
+    }
+    ```
+---
+
+## 3. Streamlit UI Components
 
 ### ⚠️ Deprecation Awareness (Streamlit 1.40+)
 *   **현상**: `use_container_width=True` 매개변수는 향후 삭제될 예정(Deprecation)이며 경고를 발생시킴.
@@ -34,7 +56,7 @@
 
 ---
 
-## 3. Dashboard Editor Patterns
+## 4. Dashboard Editor Patterns
 
 ### 🔄 Mode-Awareness (Edit vs Add)
 *   **현상**: 하나의 에디터에서 수정과 등록을 동시에 처리할 때, 수정 전용 로직(ID 기반 조회)이 등록 모드에서 실행되어 충돌함.
@@ -50,12 +72,28 @@
 
 ---
 
-## 4. Resource Efficiency (Mini PC Environment)
+## 5. Resource Efficiency (Mini PC Environment)
 
 *   **가이드**:
     *   불필요한 반복 조회를 피하기 위해 `st.cache_data`를 적극 활용하라 (단, 데이터 변경 후에는 `st.cache_data.clear()` 필수).
     *   조회 쿼리 시 필요한 컬럼만 명시적으로 `select()` 하여 네트워크 부하를 최소화하라.
 
+---
+
+## 6. ⚠️ ViewModel Scoping & State Synchronization(Android app)
+*   **현상**: 전역 상태(예: 선택된 사용자 프로필)를 관리하는 ViewModel을 Compose Navigation의 각 화면에서 viewModel()로 각각 생성하면, 화면마다 서로 다른 인스턴스가 생성되어 상태 동기화가 깨짐. (예: 상단 바에서 프로필을 바꿔도 내역 화면은 바뀌지 않음)
+*   **가이드**:
+    *   앱 전체에서 공유해야 하는 전역 상태는 MainActivity 등 최상위 스코프에서 viewModel()을 한 번만 호출하여 인스턴스를 확보하라.
+    *   확보된 인스턴스는 NavHost를 통해 각 화면(Composable)에 **명시적으로 주입(Dependency Injection)**하여 동일한 객체를 바라보게 하라.
+    ```kotlin
+    // Good: Global Instance Sharing
+    val userViewModel: UserViewModel = viewModel() // 최상위에서 생성
+    NavHost(...) {
+        composable("history") {
+            HistoryScreen(userViewModel = userViewModel) // 동일 인스턴스 주입
+        }
+    }
+    ```
 ---
 
 > **Note**: 새로운 패턴의 버그나 경고가 발견될 경우, 이 가이드라인을 최우선으로 업데이트하여 지식 자산으로 관리할 것.
