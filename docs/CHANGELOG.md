@@ -1,5 +1,27 @@
 # Changelog
 
+## [Phase 5 Milestone] - 2026-05-07
+
+### Added
+- **Look-through Analysis (복합 자산 분해) 엔진**: 
+    - `lookthrough_service.py`를 신설하여 TDF, 펀드 등 복합 자산의 내부 비중을 기초 자산군(Equity, Fixed Income 등)으로 분해하는 기능을 구현했습니다.
+    - 자산 에디터(`asset_editor.py`) 내에 세그먼트 비중 편집 UI를 추가하고, 100% 합계 검증 로직 및 DB 연동(`asset_segments` 테이블)을 완료했습니다.
+- **리밸런싱 페이지 룩스루 통합**:
+    - 리밸런싱 대시보드에 '룩스루 분석 적용' 토글을 추가하여, 상품 단위가 아닌 본질 자산군 단위의 비중 분석이 가능하도록 개선했습니다.
+    - 룩스루 모드 시 `multi_asset` 항목을 필터링하고 세부 자산군으로 재배분하는 동적 데이터 가공 로직을 적용했습니다.
+- **룰 기반(Rule-based) 리밸런싱 가이드**:
+    - AI 연결 없이도 목표 비중과의 격차를 분석하여 즉각적인 조치 사항(매수/매도 제안)을 텍스트로 요약해 주는 가이드 섹션을 신설했습니다.
+
+### Changed
+- **UI/UX 고도화 및 한글화**:
+    - 대시보드 전반의 자산 카테고리 명칭을 더 전문적인 용어로 개선했습니다. (예: `fund` -> '공모펀드', `cash` -> '현금/예수금', `unhedged` -> '환노출(UH)')
+    - `underlying_asset_class`를 룩스루의 표준 분류 체계로 확립하여 리밸런싱 목표 설정과의 연계성을 강화했습니다.
+- **Streamlit 1.40+ 규격 준수**: `GUIDE-RAIL.md` 지침에 따라 모든 UI 컴포넌트의 `use_container_width=True`를 `width='stretch'`로 교체했습니다.
+
+### Fixed
+- **`st.data_editor` 데이터 정합성 이슈**: 세그먼트 편집 시 발생하던 데이터 타입 충돌(List/Series 에러) 및 자산 전환 시 이전 데이터가 남는 세션 상태 관리 버그를 수정했습니다.
+- **Look-through 데이터 로드 버그**: DB에 저장된 데이터가 Selectbox 옵션과 일치하지 않을 때 UI에서 누락되던 현상을 정규화된 옵션 맵핑을 통해 해결했습니다.
+
 ## [Current State] - 2026-04-30
 
 ### Added

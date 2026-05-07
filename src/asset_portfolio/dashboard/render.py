@@ -222,36 +222,68 @@ def render_asset_grouping_pie_section(user_id: str, account_id: str):
     )
 
     # 한글 맵핑 정의
+    # 1. 자산 종류 (그릇의 종류)
     type_map = {
-        "fund": "펀드",
+        "fund": "공모펀드",
         "etf": "ETF",
-        "tdf": "TDF",
-        "cash": "현금(예수금)",
-        "stock": "주식",
+        "tdf": "TDF(연금형)",
+        "cash": "현금/예수금",
+        "stock": "개별주식",
         "deposit": "예적금",
-        "reits": "리츠",
+        "reits": "리츠(REITs)",
     }
+
+    # 2. 기초 자산군 (무엇에 투자하는가)
     class_map = {
-        "Multi-Asset": "멀티에셋",
-        "Real Asset": "대체자산",
-        "Fixed Income": "채권",
-        "Equity": "주식",
+        "Multi-Asset": "혼합자산",
+        "Real Asset": "대체자산(원자재 등)",
+        "Fixed Income": "채권형",
+        "Equity": "주식형",
         "Other": "기타",
     }
+
+    # 3. 투자 지역 및 통화
     region_map = {
         "korea": "국내",
         "us": "미국"
     }
     currency_map = {
-        "krw": "원",
-        "usd": "달러"
+        "krw": "원화(₩)",
+        "usd": "달러($)"
     }
+
+    # 4. 자산 성격
     asset_nature_map = {
         "physical": "실물자산",
-        "debt": "채권",
-        "equity": "주식",
+        "debt": "채권(대출채권)",
+        "equity": "지분(주식)",
         "hybrid": "혼합형",
         "derivative": "파생상품"
+    }
+
+    # 5. 환노출 방식 (가장 헷갈리는 부분 수정)
+    fx_exposure_type_map = {
+        "unhedged": "환노출(UH)",        # 달러 등 외화 가치 변동이 수익에 포함됨
+        "natural_hedge": "환헤지(H)",     # 환율 변동을 방어함
+        "krw_denominated": "원화 전용"    # 국내 자산이라 환율과 무관함
+    }
+
+    # 6. 수익 동인 (왜 오르는가)
+    return_driver_map = {
+        "inflation_hedge": "인플레 방어",
+        "yield": "인컴(배당/이자)",
+        "diversification": "위험 분산",
+        "price_appreciation": "시세 차익",
+        "alpha": "시장초과수익(알파)"
+    }
+
+    # 7. 운용 전략
+    strategy_type_map = {
+        "passive_beta": "시장추종(패시브)",
+        "absolute_return": "절대수익 추구",
+        "thematic": "테마 투자",
+        "active": "적극운용(액티브)",
+        "factor": "팩터 투자"
     }
     vehicle_type_map = {
         "etf": "ETF",
@@ -262,25 +294,6 @@ def render_asset_grouping_pie_section(user_id: str, account_id: str):
         "deposit": "예적금",
         "reits": "리츠",
         "mmf": "MMF"
-    }
-    fx_exposure_type_map = {
-        "unhedged": "환노출 없음",
-        "natural_hedge": "헤지",
-        "krw_denominated": "원화표시"
-    }
-    return_driver_map = {
-        "inflation_hedge": "인플레이션 헤지",
-        "yield": "인컴",
-        "diversification": "분산",
-        "price_appreciation": "시세차익",
-        "alpha": "알파(시장 대비 초과 수익 추구)"
-    }
-    strategy_type_map = {
-        "passive_beta": "패시브(시장 추종)",
-        "absolute_return": "절대수익 추구",
-        "thematic": "테마형",
-        "active": "액티브(시장 초과수익 추구)",
-        "factor": "팩터(요인)"
     }
     
     # 맵핑 적용 함수

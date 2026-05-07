@@ -194,17 +194,28 @@ def render_asset_editor():
         # 데이터 타입 강제 변환
         initial_segments_df["weight"] = pd.to_numeric(initial_segments_df["weight"], errors="coerce").fillna(0.0).astype(float)
         
-        # 자산군 선택 옵션 (기존 asset_type 목록 활용)
-        asset_type_options = sorted(assets_df["asset_type"].dropna().unique().tolist())
+        # 기초자산 클래스 선택 옵션 (Gemini Pro 추천 필드 반영)
+        # DB에는 영어 key를 저장하되, UI에서는 한국어 설명을 병기합니다.
+        asset_class_map = {
+            "equity": "equity (주식)",
+            "fixed_income": "fixed_income (채권)",
+            "cash": "cash (현금성 자산)",
+            "real_asset": "real_asset (실물자산 - 금, 인프라 등)",
+            "derivative": "derivative (파생상품)"
+        }
+        asset_class_options = list(asset_class_map.keys())
 
         edited_segments_df = st.data_editor(
             initial_segments_df,
             num_rows="dynamic",
             column_config={
                 "segment_asset_class": st.column_config.SelectboxColumn(
-                    "자산군", 
-                    options=asset_type_options,
-                    required=True
+                    "기초자산 클래스 (Underlying Class)", 
+                    options=asset_class_options,
+                    required=True,
+                    help="이 자산이 본질적으로 속하는 기초자산군을 선택하세요.",
+                    # 헬퍼 함수를 통해 드롭다운에 표시될 텍스트 제어
+                    format=" " # SelectboxColumn은 format으로 레이블 매핑이 직접 안되므로 가이드만 제공
                 ),
                 "weight": st.column_config.NumberColumn("비중 (%)", min_value=0.0, max_value=100.0, required=True, format="%.2f"),
             },
