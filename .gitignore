@@ -5,3 +5,4 @@ __pycache__/
 raw data/
 .GEMINI.md
 .env
+.pytest_cache/
